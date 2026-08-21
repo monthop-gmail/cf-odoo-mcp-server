@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { loadConfig, pickServer, type Env } from "./config";
-import { execute, version, type OdooConfig } from "./odoo";
+import { execute, version, type OdooConfig, type ServerConfig } from "./odoo";
 
 /**
  * An Odoo search domain: a flat list whose terms are either a prefix operator
@@ -63,6 +63,76 @@ async function run(fn: () => Promise<unknown>) {
   } catch (error) {
     return formatError(error);
   }
+}
+
+/** Compare two strings ignoring html markup and whitespace differences. */
+function sameText(a: string, b: string): boolean {
+  const strip = (value: string) =>
+    value
+      .replace(/<[^>]*>/g, "")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ")
+      .trim();
+  return strip(a) === strip(b);
+}
+
+/**
+ * Compare what was written against what Odoo stored.
+ *
+ * Odoo discards writes to readonly fields without erroring, so a successful
+ * `create` or `write` proves nothing about whether the values landed. Reading
+ * the written fields back is the only way to find out.
+ *
+ * Best-effort by design: it reports a field only when the comparison is
+ * unambiguous, and stays silent rather than guessing. A false alarm here would
+ * send an agent chasing a write that actually succeeded.
+ */
+function fieldsNotApplied(
+  requested: Record<string, unknown>,
+  stored: Record<string, unknown>,
+): string[] {
+  const dropped: string[] = [];
+
+  for (const [field, want] of Object.entries(requested)) {
+    if (!(field in stored)) continue;
+    // x2many command lists and nested writes have no comparable stored form.
+    if (want !== null && typeof want === "object") continue;
+
+    let got = stored[field];
+    // A many2one reads back as [id, display_name]; compare against the id.
+    if (Array.isArray(got) && got.length === 2 && typeof got[0] === "number") {
+      got = got[0];
+    }
+    // Odoo stores an empty string as false.
+    if (want === "" && got === false) continue;
+    if (got === want) continue;
+    // An html field normalises plain text on the way in -- "ok" is stored as
+    // "<p>ok</p>". That is the value being applied, not dropped.
+    if (typeof want === "string" && typeof got === "string" && sameText(got, want)) {
+      continue;
+    }
+
+    dropped.push(field);
+  }
+
+  return dropped;
+}
+
+/**
+ * Read back the fields just written. Bounded, so that writing to a large set
+ * does not turn one call into an unbounded read.
+ */
+async function readBack(
+  key: string,
+  server: ServerConfig,
+  model: string,
+  ids: number[],
+  values: Record<string, unknown>,
+): Promise<Record<string, unknown>[] | null> {
+  const fields = Object.keys(values);
+  if (fields.length === 0 || ids.length > DEFAULT_LIMIT) return null;
+  return execute<Record<string, unknown>[]>(key, server, model, "read", [ids], { fields });
 }
 
 export function registerTools(server: McpServer, env: Env): void {
@@ -163,7 +233,9 @@ export function registerTools(server: McpServer, env: Env): void {
   server.registerTool(
     "odoo_create",
     {
-      description: "Create a new record in an Odoo model.",
+      description:
+        "Create a new record in an Odoo model. Returns the new id along with the " +
+        "written fields read back, and lists any field Odoo did not store.",
       inputSchema: z.object({
         server: Server,
         model: Model,
@@ -176,16 +248,36 @@ export function registerTools(server: McpServer, env: Env): void {
       }),
     },
     async ({ server: name, model, values }) =>
-      run(() => {
+      run(async () => {
         const { name: key, server } = target(name);
-        return execute(key, server, model, "create", [values]);
+        const id = await execute<number>(key, server, model, "create", [values]);
+
+        const records = await readBack(key, server, model, [id], values);
+        const record = records?.[0];
+        if (!record) return { id };
+
+        const dropped = fieldsNotApplied(values, record);
+        return {
+          id,
+          record,
+          ...(dropped.length > 0
+            ? {
+                fields_not_applied: dropped,
+                warning:
+                  "Odoo did not store these fields. They are usually readonly or " +
+                  "computed; check odoo_fields_get before writing them again.",
+              }
+            : {}),
+        };
       }),
   );
 
   server.registerTool(
     "odoo_write",
     {
-      description: "Update existing records in an Odoo model.",
+      description:
+        "Update existing records in an Odoo model. Returns the written fields read " +
+        "back, and lists any field Odoo did not store.",
       inputSchema: z.object({
         server: Server,
         model: Model,
@@ -194,9 +286,28 @@ export function registerTools(server: McpServer, env: Env): void {
       }),
     },
     async ({ server: name, model, ids, values }) =>
-      run(() => {
+      run(async () => {
         const { name: key, server } = target(name);
-        return execute(key, server, model, "write", [ids, values]);
+        const written = await execute<boolean>(key, server, model, "write", [ids, values]);
+
+        const records = await readBack(key, server, model, ids, values);
+        if (!records) return { written };
+
+        const dropped = [
+          ...new Set(records.flatMap((record) => fieldsNotApplied(values, record))),
+        ];
+        return {
+          written,
+          records,
+          ...(dropped.length > 0
+            ? {
+                fields_not_applied: dropped,
+                warning:
+                  "Odoo did not store these fields on at least one record. They " +
+                  "are usually readonly or computed; check odoo_fields_get.",
+              }
+            : {}),
+        };
       }),
   );
 

@@ -19,8 +19,8 @@ All ten tools were exercised end to end against a real database:
 | `odoo_search_read` | fields, `limit`, `order`, and `'\|'` domains all work |
 | `odoo_read` | returns the requested fields |
 | `odoo_fields_get` | 120 fields on `res.partner` |
-| `odoo_create` | returns the new id |
-| `odoo_write` | returns `true`, change confirmed by reading back |
+| `odoo_create` | returns the new id and the record as stored |
+| `odoo_write` | returns the records as stored |
 | `odoo_delete` | returns `true`, record gone, count restored |
 | `odoo_execute` | `name_search` returned the expected pairs |
 
@@ -39,15 +39,34 @@ Error: odoo.exceptions.UserError: Object res.nope doesn't exist
 
 ### Odoo silently drops writes to readonly fields
 
-The most consequential one. Creating a partner with `is_company: true`
-returns a new id and every outward sign of success — but reading the record
-back shows `is_company: false`. `is_company` is `readonly: true` on Odoo 19.4,
-and Odoo neither errors nor warns; it discards the value.
+Creating a partner with `is_company: true` returns a new id and every outward
+sign of success, while the stored record comes back with `is_company: false`.
+Odoo neither errors nor warns; it discards the value.
 
-An agent that trusts the return value will report work it did not do. Read
-back after a write when the result matters, or check `odoo_fields_get` for
-`readonly` before writing. (`company_type`, the usual way to set this, does
-not exist on this version — it returns `Invalid field`.)
+`odoo_create` and `odoo_write` now read the written fields back and return
+them, listing anything Odoo did not store under `fields_not_applied`:
+
+```json
+{
+  "id": 12,
+  "record": { "id": 12, "name": "Prod ReadBack", "is_company": false },
+  "fields_not_applied": ["is_company"],
+  "warning": "Odoo did not store these fields..."
+}
+```
+
+Two things this does not do. The comparison is best-effort: it skips x2many
+command lists and nested writes, which have no comparable stored form, and it
+treats an html field's normalisation as applied — writing `"ok"` to `comment`
+stores `"<p>ok</p>"`, which is the value landing, not being dropped. And the
+read-back is skipped when writing to more than 50 records at once, so one call
+does not become an unbounded read.
+
+Worth knowing that the same field can behave differently between the two
+calls. `is_company` is dropped by `create` and applied by `write`, reproducibly.
+Whatever the reason, it is not something an agent can predict from the schema —
+which is the whole argument for reading back rather than trusting the return
+value.
 
 ### `odoo_read` on a missing id returns `[]`, not an error
 
@@ -61,12 +80,6 @@ matching record. It now defaults to 50. Raise it deliberately when you need
 more — `ir.model.fields` on a stock database holds over 4,500 rows, and an
 unbounded read of a model that size exhausts a caller's context well before
 Odoo would complain.
-
-### `odoo_execute` calls arbitrary methods
-
-It is an escape hatch by design, and it inherits whatever the configured Odoo
-account can do. Give the account only the access it needs — see the security
-note in the README.
 
 ## Client compatibility
 
@@ -86,11 +99,15 @@ omitting the header, returns `406` per the streamable-HTTP spec.
 **Protocol version.** `initialize` negotiates to `2025-11-25` even when the
 client offers `2026-07-28`.
 
-## Not done yet
+## Known limits
 
-Have `odoo_create` and `odoo_write` read the record back and return it, so
-silently dropped fields become visible at the call site. This is the one that
-would have caught the `is_company` surprise above without a second call.
+`odoo_execute` calls arbitrary methods with whatever access the configured Odoo
+account has. That is the point of it, but it means the account's permissions are
+the only thing standing between an agent and the rest of the database.
+
+`fields_not_applied` reports fields it is confident about and stays silent
+otherwise — a false alarm would send an agent chasing a write that succeeded.
+Read the returned `record` when a value really matters.
 
 ## Deploying
 

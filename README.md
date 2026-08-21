@@ -28,8 +28,8 @@ in front of it if yours is not already public.
 | `odoo_search_read` | `search_read` |
 | `odoo_search_count` | `search_count` |
 | `odoo_read` | `read` |
-| `odoo_create` | `create` |
-| `odoo_write` | `write` |
+| `odoo_create` | `create`, then reads the written fields back |
+| `odoo_write` | `write`, then reads the written fields back |
 | `odoo_delete` | `unlink` |
 | `odoo_execute` | any method |
 | `odoo_fields_get` | `fields_get` |
