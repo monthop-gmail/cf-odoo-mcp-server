@@ -3,3 +3,10 @@ node_modules/
 .dev.vars
 dist/
 *.log
+
+# secrets - never commit
+.env
+.env.*
+!.env.example
+.cf-token
+*.secret
