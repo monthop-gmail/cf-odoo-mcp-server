@@ -19,26 +19,31 @@ server ตัวนี้ทำอะไรได้ดีและไม่ด�
 
 ## ทดสอบแล้ว
 
-ยิง tool ครบทั้ง 13 ตัวกับ database จริง
+ยิง tool ครบทั้ง 13 ตัวกับ database จริง ทั้งบน SaaS 19.4 Enterprise และ 19.0
+Community ที่ลงเอง
 
-| Tool | ผล |
-| --- | --- |
-| `odoo_version` | `saas~19.4+e` |
-| `odoo_list_servers` | หา default ที่ตั้งไว้เจอ |
-| `odoo_search_count` | นับถูก |
-| `odoo_search_read` | `fields` `limit` `order` และ domain ที่มี `'\|'` ใช้ได้หมด |
-| `odoo_read` | คืน field ที่ขอ |
-| `odoo_fields_get` | 120 fields บน `res.partner` |
-| `odoo_create` | คืน id ใหม่พร้อม record ตามที่เก็บจริง |
-| `odoo_write` | คืน record ตามที่เก็บจริง |
-| `odoo_delete` | คืน `true` record หายไปจริง จำนวนกลับเป็นเท่าเดิม |
-| `odoo_execute` | `name_search` คืนคู่ค่าตามที่คาด |
-| `odoo_read_group` | จัดกลุ่ม นับ และ `id:max` ถูกต้อง รวมถึง `create_date:month` |
-| `odoo_context` | คืน uid บริษัท `Asia/Bangkok` และภาษา |
-| `odoo_get_models` | กรองตามคำค้นและตัดตัวที่ policy บล็อกออก |
+| Tool | SaaS 19.4 | 19.0 CE |
+| --- | --- | --- |
+| `odoo_version` | `saas~19.4+e` | `19.0-20260817` |
+| `odoo_list_servers` | ✅ | ✅ |
+| `odoo_context` | `Asia/Bangkok` | `Europe/Brussels` |
+| `odoo_get_models` | ✅ | ✅ |
+| `odoo_fields_get` | 120 fields | ✅ |
+| `odoo_search_count` | ✅ | 39 |
+| `odoo_search_read` | `fields` `limit` `order` และ domain `'\|'` ✅ | ✅ |
+| `odoo_read` | ✅ | ✅ |
+| `odoo_read_group` | `__count` `id:max` `create_date:month` ✅ | ✅ |
+| `odoo_execute` | `name_search` ✅ | ✅ |
+| `odoo_create` | ✅ พร้อม record ที่เก็บจริง | ✅ |
+| `odoo_write` | ✅ | ✅ |
+| `odoo_delete` | ✅ จำนวนกลับเท่าเดิม | ✅ |
 
-ข้อความที่ไม่ใช่ ASCII ผ่านไปกลับได้ถูกต้อง — ชื่อบริษัทภาษาไทยผ่าน create → read
-โดยไม่เพี้ยน
+`fields_not_applied` จับได้ทั้งสองเครื่อง แต่คนละ field เพราะแต่ละรุ่นทิ้งคนละตัว —
+SaaS ทิ้ง `is_company` ตอน `create` ส่วน CE ทิ้ง `complete_name` ซึ่งเป็น computed
+field กลไกเดียวกันทำงานทั้งคู่โดยไม่ต้องรู้ล่วงหน้าว่า field ไหนจะโดน
+
+ข้อความที่ไม่ใช่ ASCII ผ่านไปกลับได้ถูกต้องทั้งสองเครื่อง — ชื่อบริษัทและชื่อจังหวัด
+ภาษาไทยผ่าน create → read → write โดยไม่เพี้ยน
 
 ความล้มเหลวเด้งกลับมาเป็น tool error ที่พก exception ของ Odoo มาด้วย ไม่ใช่
 transport error ทำให้ model อ่านแล้วแก้เองได้
@@ -76,10 +81,10 @@ html field คือค่าเข้าแล้ว — เขียน `"ok"`
 
 ที่น่ารู้คือ field เดียวกันให้ผลต่างกันได้ทั้งระหว่าง call และระหว่างเวอร์ชัน
 
-| | `create` ด้วย `is_company: true` |
-| --- | --- |
-| SaaS 19.4 | ถูกทิ้ง — อ่านกลับได้ `false` |
-| 19.0 Community | เก็บ — อ่านกลับได้ `true` |
+| | `create` ด้วย `is_company: true` | field `company_type` |
+| --- | --- | --- |
+| SaaS 19.4 | ถูกทิ้ง — อ่านกลับได้ `false` | ไม่มี (`Invalid field`) |
+| 19.0 Community | เก็บ — อ่านกลับได้ `true` | มี |
 
 และบน SaaS ตัวเดียวกัน `write` เก็บค่าให้ ทั้งที่ `create` ทิ้ง ทำซ้ำได้ทุกครั้ง
 
@@ -122,6 +127,11 @@ context ของผู้เรียกจนหมดก่อนที่ Od
 อย่างที่เข้าใจกันบ่อย ๆ เพราะ Odoo กัน private method ไว้เองแล้ว (ดูหัวข้อข้างล่าง)
 แต่ public method ก็รวม `write` และ `unlink` บนทุก model ที่บัญชีนั้นเข้าถึงได้ ซึ่ง
 กว้างพอที่จะต้องคุมด้วย `BLOCKED_MODELS`
+
+Worker ที่ deploy แล้ววิ่งเข้า Odoo ที่ผูก `127.0.0.1` ไม่ได้ การทดสอบกับ 19.0 CE
+ทั้งหมดจึงรันผ่าน `wrangler dev --local` ซึ่งอยู่เครื่องเดียวกับ Odoo ถ้าจะใช้ Worker
+ตัวจริงกับ Odoo ที่ลงเอง ต้องทำให้เข้าถึงได้จากอินเทอร์เน็ตก่อน นี่เป็นข้อจำกัดของ
+เครือข่าย ไม่ใช่ความเข้ากันได้ของ tool
 
 `fields_not_applied` รายงานเฉพาะ field ที่มันมั่นใจ นอกนั้นเงียบ — เพราะการเตือนผิด
 จะส่ง agent ไปไล่แก้สิ่งที่เขียนสำเร็จอยู่แล้ว ถ้าค่าไหนสำคัญจริง ให้อ่านจาก `record`
