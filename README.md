@@ -6,7 +6,8 @@
 ไม่ต้องมี process รันค้างไว้ อยู่ใน free tier ของ Workers ได้สบาย
 
 พอร์ตมาจาก [odoo-mcp-claude](https://github.com/monthop-gmail/odoo-mcp-claude)
-ซึ่งให้ tool ชุดเดียวกัน 10 ตัว แต่รันเป็น Python process คุยผ่าน XML-RPC
+ซึ่งเป็น Python process คุยผ่าน XML-RPC — 10 tools แรกยกมาจากที่นั่น ส่วน
+`odoo_read_group` `odoo_context` และ `odoo_get_models` เพิ่มทีหลัง
 
 ## Odoo 19 มี API key 2 ชนิด — เช็คก่อนว่าต้องใช้อันไหน
 
@@ -26,7 +27,8 @@ Odoo Community จะไม่มี `/mcp` และไม่มี key ชน�
 **ถ้าใช้ Enterprise และ agent ของคุณอ่านอย่างเดียว คุณอาจไม่ต้องใช้ project นี้เลยก็ได้**
 MCP server ในตัวของ Odoo ไม่ต้อง deploy ไม่ต้องหา hosting และไม่ต้องเอารหัส Odoo
 ไปวางไว้ที่อื่น — ชี้ client ไปที่ `https://<odoo-ของคุณ>/mcp` พร้อม key ชนิด `mcp` ก็จบ
-แถมมันยังปฏิเสธ technical model ให้ด้วย ซึ่งเป็น guardrail ที่ project นี้ไม่มี
+แถมมันยังปฏิเสธ technical model ให้เองโดยไม่ต้องตั้งค่า ส่วน project นี้ทำได้เหมือนกัน
+แต่ต้องตั้ง `BLOCKED_MODELS` เอง ไม่ตั้งก็ไม่กัน
 
 งานที่ต้อง**เขียน**ข้อมูลต้องใช้ key ชนิด `rpc` ซึ่งคือเหตุผลที่ project นี้มีอยู่ —
 รวมถึงกรณีต่อ Odoo หลายตัวผ่าน endpoint เดียว และการมีเพดาน default ตอนอ่าน
@@ -58,12 +60,15 @@ Odoo ต้องเข้าถึงได้จากอินเทอร์
 | `odoo_create` | `create` แล้วอ่าน field ที่เขียนไปกลับมา |
 | `odoo_write` | `write` แล้วอ่าน field ที่เขียนไปกลับมา |
 | `odoo_delete` | `unlink` |
-| `odoo_execute` | method อะไรก็ได้ |
+| `odoo_execute` | **public method** ใดก็ได้ (Odoo กัน private method เอง) |
 | `odoo_fields_get` | `fields_get` |
 | `odoo_read_group` | `formatted_read_group` (ถอยไป `read_group` ถ้าเป็น Odoo รุ่นเก่า) |
 | `odoo_context` | ผู้ใช้ บริษัท timezone ภาษา |
-| `odoo_get_models` | รายชื่อ model ที่ใช้ได้ |
+| `odoo_get_models` | รายชื่อ model ที่ใช้ได้ — **ต้องสิทธิ์ Access Rights** ดูหมายเหตุใต้ตาราง |
 | `odoo_version` | `common.version` |
+
+`odoo_get_models` อ่าน `ir.model` ซึ่ง Odoo สงวนไว้ให้กลุ่ม Access Rights หรือ
+Administrator บัญชีสิทธิ์ต่ำตามที่แนะนำข้างล่างจะเรียกไม่ได้ อีก 12 ตัวใช้ได้ครบ
 
 ## การตั้งค่า
 
@@ -91,8 +96,11 @@ BLOCKED_MODELS="ir.*,res.users*,res.groups*"
 ยังหลุดผ่าน ส่วน `odoo_context` ตั้งใจให้ข้ามรั้วนี้ เพราะมันอ่านแค่ตัวตนของ
 connection ที่มีอยู่แล้ว
 
-Odoo กัน private method และซ่อนตาราง ACL ออกจาก RPC ให้อยู่แล้ว รั้วนี้จึงมีไว้
-คุมคนละแกน คือ model ที่เข้าถึงผ่าน CRUD ปกติได้ — รายละเอียดที่วัดมาอยู่ใน
+Odoo กัน private method ให้เองทุกแพลตฟอร์ม แต่ **การซ่อนตาราง ACL อย่าง
+`ir.model.access` เกิดเฉพาะบน Odoo Online** — บน Community ที่ลงเอง ตารางพวกนี้
+อ่านและเขียนได้ตามสิทธิ์บัญชี รั้วนี้จึงยิ่งจำเป็นถ้ารัน Odoo เอง
+
+รายละเอียดที่วัดมาทั้งสองแพลตฟอร์มอยู่ใน
 [NOTES.md](NOTES.md#odoo-กันอะไรให้แล้วบ้างใน-rpc)
 
 `ODOO_SERVERS` หน้าตาแบบนี้
@@ -127,6 +135,7 @@ npx wrangler secret put ODOO_URL
 npx wrangler secret put ODOO_DB
 npx wrangler secret put ODOO_USERNAME
 npx wrangler secret put ODOO_PASSWORD
+npx wrangler secret put BLOCKED_MODELS     # ir.*,res.users*,res.groups*
 ```
 
 secret ถูกเข้ารหัสตอนเก็บ และไม่โผล่ใน `wrangler.jsonc`
