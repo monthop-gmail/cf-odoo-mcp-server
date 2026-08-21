@@ -109,17 +109,38 @@ secret ถูกเข้ารหัสตอนเก็บ และไม่
 
 ## ต่อ client
 
+`.mcp.json` ในโฟลเดอร์นี้เป็นไฟล์ของ **Claude Code** ไม่ใช่ของ Worker — มันแค่บอก
+client ว่าจะไปคุยกับ endpoint ไหนด้วย token อะไร ไฟล์นี้อ้างค่าจาก environment
+จึงไม่มีความลับอยู่ในตัวและ commit ขึ้น git ได้
+
 ```json
 {
   "mcpServers": {
     "odoo": {
       "type": "streamable-http",
-      "url": "https://cf-odoo-mcp-server.<subdomain>.workers.dev/mcp",
-      "headers": { "Authorization": "Bearer <MCP_AUTH_TOKEN>" }
+      "url": "${ODOO_MCP_URL:-https://cf-odoo-mcp-server.<subdomain>.workers.dev/mcp}",
+      "headers": { "Authorization": "Bearer ${MCP_AUTH_TOKEN}" }
     }
   }
 }
 ```
+
+Claude Code ไม่ได้โหลด `.env` ให้เอง ต้อง export เข้า environment ก่อนเรียก
+
+```bash
+cp .env.example .env    # แล้วกรอก MCP_AUTH_TOKEN
+set -a; . ./.env; set +a
+claude
+```
+
+ถ้าลืม export ตัวแปรจะไม่ถูกแทนค่า `claude mcp list` จะเตือนว่าหาตัวแปรไม่เจอ
+และ Worker จะตอบ `401` — พังแบบรู้ตัว ไม่ใช่หลุดเงียบ ๆ
+
+`ODOO_MCP_URL` มีไว้ชี้ไป Worker คนละตัวได้ เช่น staging กับ production โดยไม่ต้อง
+แก้ `.mcp.json`
+
+client ตัวอื่นที่ไม่ได้อ่าน `.mcp.json` ให้ตั้ง endpoint กับ header `Authorization:
+Bearer <token>` เองตามรูปแบบเดียวกัน
 
 `GET /health` ไม่ต้อง auth คืน `{"status":"ok"}`
 

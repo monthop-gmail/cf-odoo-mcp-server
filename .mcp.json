@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "odoo": {
+      "type": "streamable-http",
+      "url": "${ODOO_MCP_URL:-https://cf-odoo-mcp-server.monthop-gmail.workers.dev/mcp}",
+      "headers": {
+        "Authorization": "Bearer ${MCP_AUTH_TOKEN}"
+      }
+    }
+  }
+}
