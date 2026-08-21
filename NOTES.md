@@ -212,7 +212,8 @@ Odoo ไม่ได้จำกัดว่า model ไหนที่ผู�
 
 `BLOCKED_MODELS` เป็นรั้วที่ตั้งได้โดยไม่ต้องไปรื้อสิทธิ์ใน Odoo ซึ่งกระทบผู้ใช้จริง
 แต่มันเป็นรั้วชั้นที่สอง ไม่ใช่ชั้นแรก — ทางแก้ที่ต้นเหตุคือให้ MCP ใช้บัญชีเฉพาะ
-ที่มีสิทธิ์เท่าที่งานต้องใช้ แทนบัญชี admin
+ที่มีสิทธิ์เท่าที่งานต้องใช้ แทนบัญชี admin ดูสูตรที่ใช้จริงในหัวข้อ
+[ใช้บัญชีเฉพาะแทน admin](#ใช้บัญชีเฉพาะแทน-admin)
 
 ### บน Community มีรั้วชั้นเดียว
 
@@ -255,6 +256,66 @@ res.partner                                            → 39 แถว ใช�
   ถูกบล็อก
 - `odoo_get_models` กรองผลลัพธ์ตามรั้ว — ค้น `ir.` ได้ `count: 0` กับ
   `hidden_by_policy: 42`
+
+## ใช้บัญชีเฉพาะแทน admin
+
+`BLOCKED_MODELS` กันได้เฉพาะทางเข้า `/mcp` ส่วนสิทธิ์ของบัญชี Odoo เป็นรั้วที่
+เลี่ยงไม่ได้ไม่ว่าจะเข้าทางไหน ทำอันนี้แล้วอันแรกจะกลายเป็นของแถม
+
+### สูตรที่ใช้จริง
+
+```
+name       MCP Bot
+login      ต้องเป็นรูปแบบอีเมลบน Odoo Online (บน Community ใช้ชื่อธรรมดาได้)
+group_ids  [base.group_user, base.group_partner_manager]
+           ห้ามมี base.group_system
+tz         ตั้งด้วย — ไม่ตั้งจะเป็น false แล้ว odoo_context จะบอก agent ว่าไม่มี
+           timezone ซึ่งพาไปคำนวณเวลาผิด
+```
+
+**ชื่อ field เปลี่ยนใน Odoo 19** จาก `groups_id` เป็น `group_ids` ตัวอย่างโค้ดเก่า
+เกือบทั้งหมดยังเป็นชื่อเดิม
+
+`base.group_user` อย่างเดียวไม่พอ — สร้าง `res.partner` ไม่ได้ ต้องเติม
+`base.group_partner_manager` (กลุ่ม "Contact / Creation") กลับเข้าไป นี่คือ
+ลักษณะของ least privilege ที่ต้องไล่เติมสิ่งที่ใช้จริงทีละอย่าง ไม่ใช่ตั้งครั้งเดียวจบ
+
+### วัดผลแล้ว
+
+เส้นทางที่ admin ทำได้ทั้งหมด bot ทำไม่ได้ และ Odoo เป็นคนปฏิเสธเอง
+
+| | admin | bot |
+| --- | --- | --- |
+| `create ir.model.access` | ✅ | ❌ |
+| `read/write/create ir.cron` | ✅ | ❌ |
+| `create ir.actions.server` | ✅ | ❌ |
+| `create res.users` | ✅ | ❌ |
+| `create ir.config_parameter` | ✅ | ❌ |
+| CRUD `res.partner` | ✅ | ✅ |
+
+### tool ที่ใช้ไม่ได้กับบัญชีสิทธิ์ต่ำ
+
+**`odoo_get_models`** อ่าน `ir.model` ซึ่ง Odoo สงวนไว้ให้กลุ่ม Access Rights
+(`base.group_erp_manager`) หรือ Administrator เท่านั้น bot จึงเรียกไม่ได้
+
+```
+admin → ir.model  300 models
+bot   → ir.model  AccessError
+```
+
+**อย่าให้กลุ่มนั้นเพื่อแก้** — Access Rights คือกลุ่มที่จัดการ ACL ได้ ให้ไปเท่ากับ
+คืนสิทธิ์ที่เพิ่งอุดไปทั้งหมด ยอมเสีย tool ตัวเดียวคุ้มกว่า อีก 12 ตัวใช้ได้ครบ
+รวมทั้ง create write และ delete
+
+### API key
+
+bot สร้าง key ของตัวเองได้ ไม่ต้องพึ่ง admin — ตรวจแล้วว่ามีสิทธิ์ใช้ wizard
+`res.users.apikeys.description` และเห็น scope ทั้ง `rpc` กับ `mcp`
+
+ในหน้าเว็บอยู่ที่ avatar มุมขวาบน → My Profile → แท็บ Account Security
+
+ระหว่างที่ยังไม่มี key ใช้รหัสผ่านของ bot แทนได้ ทำงานเหมือนกัน API key ดีกว่า
+ตรงที่ revoke แยกได้โดยไม่กระทบการล็อกอิน
 
 ## เทียบกับ MCP server ในตัวของ Odoo
 
