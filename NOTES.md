@@ -204,6 +204,48 @@ Odoo ไม่ได้จำกัดว่า model ไหนที่ผู�
 แต่มันเป็นรั้วชั้นที่สอง ไม่ใช่ชั้นแรก — ทางแก้ที่ต้นเหตุคือให้ MCP ใช้บัญชีเฉพาะ
 ที่มีสิทธิ์เท่าที่งานต้องใช้ แทนบัญชี admin
 
+### บน Community มีรั้วชั้นเดียว
+
+ทดสอบเส้นทางยกระดับสิทธิ์ทั้งหมดบน 19.0 Community ด้วยบัญชี admin ผ่าน RPC
+(database ที่ทิ้งได้ ลบ record ที่สร้างทุกตัวแล้ว)
+
+| ทำอะไร | ผล |
+| --- | --- |
+| `create ir.model.access` | **สำเร็จ** — เขียนสิทธิ์ให้ตัวเองได้ |
+| `create res.users` | **สำเร็จ** |
+| `write res.users` | **สำเร็จ** |
+| `create ir.config_parameter` | **สำเร็จ** |
+| `write ir.cron` | **สำเร็จ** |
+| `create ir.actions.server` (มี Python) | **สำเร็จ** |
+| อ่าน `res.users.apikeys` | **สำเร็จ** |
+| อ่าน `ir.attachment` | **สำเร็จ** |
+
+สิ่งเดียวที่ Odoo กันเองคือ private method ที่เหลือขึ้นกับสิทธิ์ของบัญชีล้วน ๆ
+และ admin ก็ผ่านหมด
+
+**เทียบกับ SaaS แล้ว Community เปิดกว้างกว่า** เพราะ SaaS ยังซ่อน `ir.model.access`
+กับ `ir.rule` ออกจาก RPC ให้ ส่วน Community ไม่ซ่อน ใครรัน Odoo เองด้วยบัญชี admin
+จึงยิ่งต้องตั้ง `BLOCKED_MODELS` ไม่ใช่ตั้งก็ได้ไม่ตั้งก็ได้
+
+### รั้วของ project นี้บน Community
+
+ตั้ง `BLOCKED_MODELS="ir.*,res.users*,res.groups*"` ตามที่ README แนะนำ แล้ววัดซ้ำ
+
+```
+ir.model.access ir.rule ir.cron ir.actions.server ir.config_parameter
+res.users res.users.apikeys res.groups ir.attachment   → ปฏิเสธทั้งหมด
+res.partner                                            → 39 แถว ใช้ได้ตามปกติ
+```
+
+พฤติกรรมพิเศษสองอย่างทำงานตามที่ออกแบบ
+
+- `odoo_execute` โดนรั้วด้วย ลองเรียก `create` บน `ir.model.access` ผ่านมันก็ถูก
+  ปฏิเสธ ปิดช่องหลบที่กว้างที่สุด
+- `odoo_context` ข้ามรั้วตามตั้งใจ ยังคืน uid บริษัท timezone ได้แม้ `res.users*`
+  ถูกบล็อก
+- `odoo_get_models` กรองผลลัพธ์ตามรั้ว — ค้น `ir.` ได้ `count: 0` กับ
+  `hidden_by_policy: 42`
+
 ## เทียบกับ MCP server ในตัวของ Odoo
 
 Odoo 19 มี MCP server ของตัวเองที่ `/mcp` เข้าถึงด้วย API key ชนิด `mcp`
