@@ -1,0 +1,13 @@
+# Copy to .dev.vars for local `wrangler dev`. Never commit .dev.vars.
+# In production these are set with `wrangler secret put <NAME>`.
+
+MCP_AUTH_TOKEN="generate-with-openssl-rand-hex-32"
+
+# Single server
+ODOO_URL="https://odoo.example.com"
+ODOO_DB="mydb"
+ODOO_USERNAME="user@example.com"
+ODOO_PASSWORD="your-odoo-api-key"
+
+# ...or multiple servers (takes precedence over the four vars above)
+# ODOO_SERVERS='{"default_server":"prod","servers":{"prod":{"url":"https://odoo.example.com","db":"mydb","username":"user@example.com","password":"key"}}}'
