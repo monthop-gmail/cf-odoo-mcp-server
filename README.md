@@ -9,9 +9,12 @@
 ซึ่งเป็น Python process คุยผ่าน XML-RPC — 10 tools แรกยกมาจากที่นั่น ส่วน
 `odoo_read_group` `odoo_context` และ `odoo_get_models` เพิ่มทีหลัง
 
-## Odoo 19 มี API key 2 ชนิด — เช็คก่อนว่าต้องใช้อันไหน
+## Odoo 19 **Enterprise** มี API key 2 ชนิด — เช็คก่อนว่าต้องใช้อันไหน
 
-Odoo 19 ออก API key ได้ 2 scope และใช้แทนกันไม่ได้
+หัวข้อนี้ใช้กับ **Enterprise เท่านั้น** ถ้าใช้ Community ข้ามไปได้เลย — มีแต่ key
+ชนิด `rpc` ซึ่งคือสิ่งที่ project นี้ใช้
+
+บน Odoo 19 Enterprise ออก API key ได้ 2 scope และใช้แทนกันไม่ได้
 
 | ชนิด key | คุยกับ | ได้อะไร |
 | --- | --- | --- |
