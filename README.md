@@ -86,6 +86,10 @@ BLOCKED_MODELS="ir.*,res.users*,res.groups*"
 ยังหลุดผ่าน ส่วน `odoo_context` ตั้งใจให้ข้ามรั้วนี้ เพราะมันอ่านแค่ตัวตนของ
 connection ที่มีอยู่แล้ว
 
+Odoo กัน private method และซ่อนตาราง ACL ออกจาก RPC ให้อยู่แล้ว รั้วนี้จึงมีไว้
+คุมคนละแกน คือ model ที่เข้าถึงผ่าน CRUD ปกติได้ — รายละเอียดที่วัดมาอยู่ใน
+[NOTES.md](NOTES.md#odoo-กันอะไรให้แล้วบ้างใน-rpc)
+
 `ODOO_SERVERS` หน้าตาแบบนี้
 
 ```json
