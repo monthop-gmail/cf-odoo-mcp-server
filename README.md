@@ -1,80 +1,77 @@
 # cf-odoo-mcp-server
 
-An [MCP](https://modelcontextprotocol.io) server for Odoo ERP, running on Cloudflare Workers.
+[MCP](https://modelcontextprotocol.io) server สำหรับ Odoo ERP ที่รันบน Cloudflare Workers
 
-Stateless HTTP transport — no Durable Objects, no container, no always-on process.
-It fits comfortably in the Workers free tier.
+ใช้ transport แบบ stateless HTTP — ไม่ต้องใช้ Durable Objects ไม่ต้องมี container
+ไม่ต้องมี process รันค้างไว้ อยู่ใน free tier ของ Workers ได้สบาย
 
-Ported from [odoo-mcp-claude](https://github.com/monthop-gmail/odoo-mcp-claude), which
-runs the same ten tools as a Python process over XML-RPC.
+พอร์ตมาจาก [odoo-mcp-claude](https://github.com/monthop-gmail/odoo-mcp-claude)
+ซึ่งให้ tool ชุดเดียวกัน 10 ตัว แต่รันเป็น Python process คุยผ่าน XML-RPC
 
-## Odoo 19 has two API key types — check which one you need
+## Odoo 19 มี API key 2 ชนิด — เช็คก่อนว่าต้องใช้อันไหน
 
-Odoo 19 issues API keys in two scopes, and they are not interchangeable:
+Odoo 19 ออก API key ได้ 2 scope และใช้แทนกันไม่ได้
 
-| Key type | Speaks to | What you get |
+| ชนิด key | คุยกับ | ได้อะไร |
 | --- | --- | --- |
-| **`mcp`** | Odoo's own `/mcp` endpoint | A built-in MCP server. Five tools, **read-only** — there is no write scope to enable. |
-| **`rpc`** | `/jsonrpc` | Full ORM access. **This project uses this one.** |
+| **`mcp`** | `/mcp` ของ Odoo เอง | MCP server ในตัว 5 tools **อ่านอย่างเดียว** — ไม่มี scope เขียนให้เปิด |
+| **`rpc`** | `/jsonrpc` | เข้าถึง ORM ได้เต็ม **project นี้ใช้อันนี้** |
 
-The scoping is strict: an `rpc` key gets `401` from `/mcp`, and an `mcp` key
-fails to authenticate over JSON-RPC.
+การแบ่ง scope เข้มงวดทั้งสองทาง: key ชนิด `rpc` ยิง `/mcp` จะได้ `401`
+ส่วน key ชนิด `mcp` ก็ authenticate ผ่าน JSON-RPC ไม่ได้
 
-**So you may not need this project at all.** If your agent only reads, Odoo's
-built-in server needs no deployment, no hosting, and no copy of your Odoo
-credentials anywhere else — point your client at `https://<your-odoo>/mcp` with
-an `mcp` key and you are done. It also refuses technical models outright, a
-guardrail this project does not have.
+**เพราะฉะนั้นคุณอาจไม่ต้องใช้ project นี้เลยก็ได้** ถ้า agent ของคุณอ่านอย่างเดียว
+MCP server ในตัวของ Odoo ไม่ต้อง deploy ไม่ต้องหา hosting และไม่ต้องเอารหัส Odoo
+ไปวางไว้ที่อื่น — ชี้ client ไปที่ `https://<odoo-ของคุณ>/mcp` พร้อม key ชนิด `mcp` ก็จบ
+แถมมันยังปฏิเสธ technical model ให้ด้วย ซึ่งเป็น guardrail ที่ project นี้ไม่มี
 
-Anything that writes needs an `rpc` key, and that is what this project is for —
-along with several Odoo instances behind one endpoint, and a bounded default on
-reads. The two can run side by side.
+งานที่ต้อง**เขียน**ข้อมูลต้องใช้ key ชนิด `rpc` ซึ่งคือเหตุผลที่ project นี้มีอยู่ —
+รวมถึงกรณีต่อ Odoo หลายตัวผ่าน endpoint เดียว และการมีเพดาน default ตอนอ่าน
+ทั้งสองตัวรันคู่กันได้
 
-[NOTES.md](NOTES.md#compared-with-odoos-built-in-mcp-server) has the full
-comparison, including a schema quirk in the built-in server that will trip an
-agent up.
+[NOTES.md](NOTES.md#เทียบกับ-mcp-server-ในตัวของ-odoo) มีผลเทียบแบบเต็ม
+รวมถึงจุดที่ schema ของ MCP server ในตัวจะทำให้ agent สะดุด
 
-## Why JSON-RPC instead of XML-RPC
+## ทำไมใช้ JSON-RPC ไม่ใช่ XML-RPC
 
-Python's `xmlrpc.client` needs raw sockets, which the Workers runtime does not
-provide. Odoo exposes the same `execute_kw` surface over JSON-RPC at `/jsonrpc`,
-which is ordinary HTTP and works under `fetch` unchanged.
+`xmlrpc.client` ของ Python ต้องใช้ raw socket ซึ่ง runtime ของ Workers ไม่มีให้
+แต่ Odoo เปิด `execute_kw` ชุดเดียวกันผ่าน JSON-RPC ที่ `/jsonrpc` ซึ่งเป็น HTTP ธรรมดา
+ใช้กับ `fetch` ได้ตรง ๆ ไม่ต้องดัดแปลงอะไร
 
-## Requirements
+## ข้อกำหนด
 
-Odoo must be reachable from the public internet over HTTPS. A Worker cannot
-reach a LAN address; put [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
-in front of it if yours is not already public.
+Odoo ต้องเข้าถึงได้จากอินเทอร์เน็ตผ่าน HTTPS — Worker วิ่งเข้า LAN ไม่ได้
+ถ้า Odoo ยังไม่ public ให้เอา [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+มาคั่นไว้ข้างหน้า
 
 ## Tools
 
-| Tool | Odoo method |
+| Tool | method ของ Odoo |
 | --- | --- |
-| `odoo_list_servers` | — (lists configured servers) |
+| `odoo_list_servers` | — (แสดง server ที่ตั้งค่าไว้) |
 | `odoo_search_read` | `search_read` |
 | `odoo_search_count` | `search_count` |
 | `odoo_read` | `read` |
-| `odoo_create` | `create`, then reads the written fields back |
-| `odoo_write` | `write`, then reads the written fields back |
+| `odoo_create` | `create` แล้วอ่าน field ที่เขียนไปกลับมา |
+| `odoo_write` | `write` แล้วอ่าน field ที่เขียนไปกลับมา |
 | `odoo_delete` | `unlink` |
-| `odoo_execute` | any method |
+| `odoo_execute` | method อะไรก็ได้ |
 | `odoo_fields_get` | `fields_get` |
 | `odoo_version` | `common.version` |
 
-## Configuration
+## การตั้งค่า
 
-| Variable | Purpose |
+| ตัวแปร | ใช้ทำอะไร |
 | --- | --- |
-| `MCP_AUTH_TOKEN` | Required. Bearer token callers must present. |
-| `ODOO_SERVERS` | JSON, for one or more servers. Takes precedence. |
-| `ODOO_URL` `ODOO_DB` `ODOO_USERNAME` `ODOO_PASSWORD` | Single-server fallback. |
-| `ALLOWED_ORIGIN_HOSTNAMES` | Optional. Comma-separated hostnames whose browser `Origin` may call `/mcp`, or `*`. Unset, only localhost and this Worker's own `workers.dev` hostname are accepted. Server-side clients send no `Origin` and are unaffected. |
+| `MCP_AUTH_TOKEN` | **จำเป็น** bearer token ที่ผู้เรียกต้องแนบมา |
+| `ODOO_SERVERS` | JSON รองรับหนึ่งหรือหลาย server ถ้าตั้งไว้จะชนะตัวข้างล่าง |
+| `ODOO_URL` `ODOO_DB` `ODOO_USERNAME` `ODOO_PASSWORD` | ทางเลือกสำรองสำหรับ server เดียว |
+| `ALLOWED_ORIGIN_HOSTNAMES` | ไม่บังคับ รายชื่อ hostname คั่นด้วย comma ที่ยอมให้ browser `Origin` เรียก `/mcp` ได้ หรือใส่ `*` ถ้าไม่ตั้ง จะรับเฉพาะ localhost กับ hostname `workers.dev` ของ Worker เอง — client ฝั่ง server ไม่ส่ง `Origin` มาอยู่แล้วจึงไม่ได้รับผลกระทบ |
 
-Prefer an Odoo **API key** over an account password, and give the account only
-the access the tools actually need — `odoo_delete` and `odoo_write` reach whatever
-that account can reach.
+ควรใช้ **API key** ของ Odoo แทนรหัสผ่านบัญชี และให้สิทธิ์บัญชีนั้นเท่าที่ tool ต้องใช้จริง —
+`odoo_delete` กับ `odoo_write` เข้าถึงได้ทุกอย่างที่บัญชีนั้นเข้าถึงได้
 
-`ODOO_SERVERS` looks like:
+`ODOO_SERVERS` หน้าตาแบบนี้
 
 ```json
 {
@@ -85,15 +82,15 @@ that account can reach.
 }
 ```
 
-## Local development
+## พัฒนาบนเครื่อง
 
 ```bash
 npm install
-cp .dev.vars.example .dev.vars   # then fill it in
+cp .dev.vars.example .dev.vars   # แล้วกรอกค่าให้ครบ
 npm run dev
 ```
 
-`.dev.vars` is gitignored. Never commit credentials.
+`.dev.vars` ถูก gitignore ไว้แล้ว อย่า commit รหัสผ่านเด็ดขาด
 
 ## Deploy
 
@@ -108,9 +105,9 @@ npx wrangler secret put ODOO_USERNAME
 npx wrangler secret put ODOO_PASSWORD
 ```
 
-Secrets are encrypted at rest and never appear in `wrangler.jsonc`.
+secret ถูกเข้ารหัสตอนเก็บ และไม่โผล่ใน `wrangler.jsonc`
 
-## Connecting a client
+## ต่อ client
 
 ```json
 {
@@ -124,23 +121,23 @@ Secrets are encrypted at rest and never appear in `wrangler.jsonc`.
 }
 ```
 
-`GET /health` is unauthenticated and returns `{"status":"ok"}`.
+`GET /health` ไม่ต้อง auth คืน `{"status":"ok"}`
 
-## Security
+## ความปลอดภัย
 
-The endpoint is public, so every request to `/mcp` must carry the bearer token;
-it is compared in constant time. If `MCP_AUTH_TOKEN` is unset the Worker returns
-500 rather than falling open.
+endpoint นี้เป็น public ทุก request ที่เข้า `/mcp` จึงต้องแนบ bearer token มาด้วย
+และเทียบแบบ constant time ถ้าไม่ได้ตั้ง `MCP_AUTH_TOKEN` ไว้ Worker จะคืน 500
+แทนที่จะเปิดโล่ง
 
-A shared token is appropriate for a personal or internal server. For per-user
-identity, put the [Workers OAuth Provider](https://github.com/cloudflare/workers-oauth-provider)
-in front instead.
+token ตัวเดียวใช้ร่วมกันเหมาะกับ server ส่วนตัวหรือใช้ภายใน ถ้าต้องแยกตัวตนรายคน
+ให้เอา [Workers OAuth Provider](https://github.com/cloudflare/workers-oauth-provider)
+มาคั่นข้างหน้าแทน
 
-## Field notes
+## บันทึกจากการใช้งานจริง
 
-[NOTES.md](NOTES.md) records what was verified against a live Odoo instance and
-the caveats that matter when an AI agent drives these tools — notably that Odoo
-silently discards writes to readonly fields.
+[NOTES.md](NOTES.md) บันทึกสิ่งที่ทดสอบกับ Odoo ตัวจริงแล้ว และข้อควรระวังที่สำคัญ
+เวลาให้ AI agent เป็นคนสั่ง tool เหล่านี้ — โดยเฉพาะเรื่องที่ Odoo ทิ้งค่าที่เขียนลง
+readonly field ไปเงียบ ๆ
 
 ## License
 

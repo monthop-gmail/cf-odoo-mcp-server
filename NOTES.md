@@ -1,50 +1,50 @@
-# Field notes
+# บันทึกจากการใช้งานจริง
 
-What this server does and does not do well, from testing every tool against a
-live Odoo instance (SaaS 19.4 Enterprise) through the deployed Worker.
+server ตัวนี้ทำอะไรได้ดีและไม่ดีบ้าง จากการทดสอบ tool ทุกตัวกับ Odoo ตัวจริง
+(SaaS 19.4 Enterprise) ผ่าน Worker ที่ deploy แล้ว
 
-These are operational caveats, not a changelog. Most of them are Odoo's
-behaviour showing through rather than bugs in this server — which is exactly
-why they are worth writing down, because an agent cannot infer them.
+นี่คือข้อควรระวังตอนใช้งาน ไม่ใช่ changelog ส่วนใหญ่เป็นพฤติกรรมของ Odoo เองที่โผล่
+ออกมา ไม่ใช่บั๊กของ server ตัวนี้ — ซึ่งเป็นเหตุผลว่าทำไมยิ่งต้องจดไว้ เพราะ agent
+เดาเองไม่ได้
 
-## Verified
+## ทดสอบแล้ว
 
-All ten tools were exercised end to end against a real database:
+ยิง tool ครบทั้ง 10 ตัวกับ database จริง
 
-| Tool | Result |
+| Tool | ผล |
 | --- | --- |
 | `odoo_version` | `saas~19.4+e` |
-| `odoo_list_servers` | resolves the configured default |
-| `odoo_search_count` | correct count |
-| `odoo_search_read` | fields, `limit`, `order`, and `'\|'` domains all work |
-| `odoo_read` | returns the requested fields |
-| `odoo_fields_get` | 120 fields on `res.partner` |
-| `odoo_create` | returns the new id and the record as stored |
-| `odoo_write` | returns the records as stored |
-| `odoo_delete` | returns `true`, record gone, count restored |
-| `odoo_execute` | `name_search` returned the expected pairs |
+| `odoo_list_servers` | หา default ที่ตั้งไว้เจอ |
+| `odoo_search_count` | นับถูก |
+| `odoo_search_read` | `fields` `limit` `order` และ domain ที่มี `'\|'` ใช้ได้หมด |
+| `odoo_read` | คืน field ที่ขอ |
+| `odoo_fields_get` | 120 fields บน `res.partner` |
+| `odoo_create` | คืน id ใหม่พร้อม record ตามที่เก็บจริง |
+| `odoo_write` | คืน record ตามที่เก็บจริง |
+| `odoo_delete` | คืน `true` record หายไปจริง จำนวนกลับเป็นเท่าเดิม |
+| `odoo_execute` | `name_search` คืนคู่ค่าตามที่คาด |
 
-Non-ASCII text round-trips correctly — a Thai company name survived
-create → read unchanged.
+ข้อความที่ไม่ใช่ ASCII ผ่านไปกลับได้ถูกต้อง — ชื่อบริษัทภาษาไทยผ่าน create → read
+โดยไม่เพี้ยน
 
-Failures come back as tool errors carrying Odoo's own exception, not as
-transport errors, so a model can read and correct them:
+ความล้มเหลวเด้งกลับมาเป็น tool error ที่พก exception ของ Odoo มาด้วย ไม่ใช่
+transport error ทำให้ model อ่านแล้วแก้เองได้
 
 ```
 Error: builtins.ValueError: Invalid field 'login_date' on 'res.partner'
 Error: odoo.exceptions.UserError: Object res.nope doesn't exist
 ```
 
-## Caveats for AI agents
+## ข้อควรระวังสำหรับ AI agent
 
-### Odoo silently drops writes to readonly fields
+### Odoo ทิ้งค่าที่เขียนลง readonly field ไปเงียบ ๆ
 
-Creating a partner with `is_company: true` returns a new id and every outward
-sign of success, while the stored record comes back with `is_company: false`.
-Odoo neither errors nor warns; it discards the value.
+สร้าง partner ด้วย `is_company: true` จะได้ id ใหม่กลับมาและดูเหมือนสำเร็จทุกอย่าง
+แต่พออ่าน record ที่เก็บจริงกลับมาได้ `is_company: false` — Odoo ไม่ error ไม่เตือน
+มันทิ้งค่านั้นไปเฉย ๆ
 
-`odoo_create` and `odoo_write` now read the written fields back and return
-them, listing anything Odoo did not store under `fields_not_applied`:
+ตอนนี้ `odoo_create` กับ `odoo_write` อ่าน field ที่เขียนไปกลับมาคืนให้ด้วย และ
+ระบุ field ที่ Odoo ไม่ได้เก็บไว้ใต้ `fields_not_applied`
 
 ```json
 {
@@ -55,142 +55,131 @@ them, listing anything Odoo did not store under `fields_not_applied`:
 }
 ```
 
-Two things this does not do. The comparison is best-effort: it skips x2many
-command lists and nested writes, which have no comparable stored form, and it
-treats an html field's normalisation as applied — writing `"ok"` to `comment`
-stores `"<p>ok</p>"`, which is the value landing, not being dropped. And the
-read-back is skipped when writing to more than 50 records at once, so one call
-does not become an unbounded read.
+มี 2 อย่างที่มันไม่ทำ อย่างแรกการเทียบเป็นแบบ best-effort: มันข้าม x2many command
+list กับ nested write ซึ่งไม่มีรูปแบบที่เก็บไว้ให้เทียบได้ และถือว่าการ normalise ของ
+html field คือค่าเข้าแล้ว — เขียน `"ok"` ลง `comment` แล้ว Odoo เก็บเป็น `"<p>ok</p>"`
+นั่นคือค่าเข้าไม่ใช่ถูกทิ้ง อย่างที่สองมันข้ามการอ่านกลับเมื่อเขียนเกิน 50 record
+เพื่อไม่ให้ call เดียวกลายเป็น unbounded read
 
-Worth knowing that the same field can behave differently between the two
-calls. `is_company` is dropped by `create` and applied by `write`, reproducibly.
-Whatever the reason, it is not something an agent can predict from the schema —
-which is the whole argument for reading back rather than trusting the return
-value.
+ที่น่ารู้คือ field เดียวกันอาจให้ผลต่างกันระหว่างสอง call — `is_company` ถูก `create`
+ทิ้ง แต่ `write` เก็บ ทำซ้ำได้ทุกครั้ง เหตุผลจะเป็นอะไรก็ตาม มันไม่ใช่สิ่งที่ agent
+เดาได้จาก schema ซึ่งคือเหตุผลทั้งหมดที่ต้องอ่านกลับแทนการเชื่อค่าที่ return มา
 
-### `odoo_read` on a missing id returns `[]`, not an error
+### `odoo_read` กับ id ที่ไม่มี คืน `[]` ไม่ใช่ error
 
-Deleted, never existed, and invisible-to-this-user are indistinguishable.
-Use `odoo_search_count` to tell "gone" from "not permitted".
+ถูกลบไปแล้ว ไม่เคยมี และมองไม่เห็นเพราะไม่มีสิทธิ์ — สามอย่างนี้แยกกันไม่ออก
+ใช้ `odoo_search_count` เพื่อแยก "หายไปแล้ว" ออกจาก "ไม่มีสิทธิ์"
 
-### `odoo_search_read` returns 50 records unless told otherwise
+### `odoo_search_read` คืน 50 record ถ้าไม่ได้สั่งเป็นอย่างอื่น
 
-Odoo imposes no limit of its own, so omitting `limit` used to return every
-matching record. It now defaults to 50. Raise it deliberately when you need
-more — `ir.model.fields` on a stock database holds over 4,500 rows, and an
-unbounded read of a model that size exhausts a caller's context well before
-Odoo would complain.
+Odoo ไม่มีเพดานของตัวเอง เมื่อก่อนไม่ใส่ `limit` จึงคืนทุก record ที่ตรงเงื่อนไข
+ตอนนี้ default เป็น 50 ถ้าต้องการมากกว่านั้นให้ระบุเองอย่างตั้งใจ — `ir.model.fields`
+บน database มาตรฐานมีเกิน 4,500 แถว การอ่าน model ขนาดนั้นแบบไม่จำกัดจะกิน
+context ของผู้เรียกจนหมดก่อนที่ Odoo จะบ่นเสียอีก
 
-## Client compatibility
+## ความเข้ากันได้กับ client
 
-**Server-side connectors work.** Requests without an `Origin` header — every
-server-side MCP client — pass through.
+**connector ฝั่ง server ใช้ได้** request ที่ไม่มี header `Origin` ซึ่งก็คือ MCP client
+ฝั่ง server ทุกตัว ผ่านได้หมด
 
-**Browser-based clients are refused unless configured.** A preflight from a
-browser origin gets `403` by default — the handler trusts only localhost and
-the endpoint's own `workers.dev` hostname. Set `ALLOWED_ORIGIN_HOSTNAMES` to a
-comma-separated list of hostnames, or `*`, to widen it. Origins outside the
-list still get `403`, and the bearer token is required either way.
+**client ที่รันบน browser ถูกปฏิเสธถ้าไม่ได้ตั้งค่า** preflight จาก browser origin
+จะได้ `403` เป็นค่าเริ่มต้น เพราะ handler เชื่อแค่ localhost กับ hostname `workers.dev`
+ของ endpoint เอง ตั้ง `ALLOWED_ORIGIN_HOSTNAMES` เป็นรายชื่อ hostname คั่นด้วย comma
+หรือ `*` เพื่อขยาย origin ที่อยู่นอกรายชื่อยังได้ `403` อยู่ดี และต้องมี bearer token
+ทั้งสองกรณี
 
-**Both accept types are required.** A client must send
-`Accept: application/json, text/event-stream`. Sending only the first, or
-omitting the header, returns `406` per the streamable-HTTP spec.
+**ต้องส่ง accept ทั้งสองแบบ** client ต้องส่ง `Accept: application/json, text/event-stream`
+ถ้าส่งแค่อันแรกหรือไม่ส่ง header เลยจะได้ `406` ตาม spec ของ streamable-HTTP
 
-**Protocol version.** `initialize` negotiates to `2025-11-25` even when the
-client offers `2026-07-28`.
+**เวอร์ชัน protocol** `initialize` negotiate ลงมาที่ `2025-11-25` แม้ client จะเสนอ
+`2026-07-28` มาก็ตาม
 
-## Known limits
+## ขอบเขตที่รู้อยู่
 
-`odoo_execute` calls arbitrary methods with whatever access the configured Odoo
-account has. That is the point of it, but it means the account's permissions are
-the only thing standing between an agent and the rest of the database.
+`odoo_execute` เรียก method อะไรก็ได้ด้วยสิทธิ์เท่าที่บัญชี Odoo ที่ตั้งค่าไว้มี
+นั่นคือจุดประสงค์ของมัน แต่แปลว่าสิทธิ์ของบัญชีนั้นคือสิ่งเดียวที่กั้นระหว่าง agent
+กับข้อมูลส่วนที่เหลือทั้งหมด
 
-`fields_not_applied` reports fields it is confident about and stays silent
-otherwise — a false alarm would send an agent chasing a write that succeeded.
-Read the returned `record` when a value really matters.
+`fields_not_applied` รายงานเฉพาะ field ที่มันมั่นใจ นอกนั้นเงียบ — เพราะการเตือนผิด
+จะส่ง agent ไปไล่แก้สิ่งที่เขียนสำเร็จอยู่แล้ว ถ้าค่าไหนสำคัญจริง ให้อ่านจาก `record`
+ที่คืนมา
 
-## Compared with Odoo's built-in MCP server
+## เทียบกับ MCP server ในตัวของ Odoo
 
-Odoo 19 ships its own MCP server at `/mcp`, reachable with an API key of type
-`mcp`. Everything below was measured against the same instance this project was
-tested on (SaaS 19.4 Enterprise), so the two columns are directly comparable.
+Odoo 19 มี MCP server ของตัวเองที่ `/mcp` เข้าถึงด้วย API key ชนิด `mcp`
+ทุกอย่างข้างล่างนี้วัดกับ instance เดียวกับที่ใช้ทดสอบ project นี้ (SaaS 19.4
+Enterprise) จึงเทียบกันได้ตรง ๆ
 
-It identifies itself as `{"name": "Odoo", "version": "1.0.0"}` and negotiates
-protocol `2025-11-25`.
+มันบอกตัวเองว่า `{"name": "Odoo", "version": "1.0.0"}` และ negotiate protocol
+`2025-11-25`
 
-### What it offers
+### มันให้อะไรมา
 
-Five tools, all read-only:
+5 tools อ่านอย่างเดียวทั้งหมด
 
-| Tool | Purpose |
+| Tool | ทำอะไร |
 | --- | --- |
-| `ai_tool_mcp_retrieve_initial_context` | Timezone, user, and active company |
-| `ai_tool_get_models` | The models an agent may touch |
-| `ai_tool_get_fields` | Field definitions for a model |
-| `ai_tool_search` | Search and read |
-| `ai_tool_read_group` | Grouped aggregates |
+| `ai_tool_mcp_retrieve_initial_context` | timezone ผู้ใช้ และบริษัทที่ active |
+| `ai_tool_get_models` | model ที่ agent แตะได้ |
+| `ai_tool_get_fields` | นิยาม field ของ model |
+| `ai_tool_search` | ค้นหาและอ่าน |
+| `ai_tool_read_group` | aggregate แบบจัดกลุ่ม |
 
-There are no write tools. `ai_tool_create`, `ai_tool_write` and
-`ai_tool_unlink` all return `The tool '...' doesn't exist`, the same answer an
-invented tool name gets.
+ไม่มี tool สำหรับเขียนเลย `ai_tool_create` `ai_tool_write` และ `ai_tool_unlink`
+คืน `The tool '...' doesn't exist` เหมือนกับตอนที่ใส่ชื่อ tool มั่ว ๆ เข้าไป
 
-Read-only is not a setting to change. Creating an `mcp` key on 19.4 offers no
-scope choice — unlike third-party write-ups describing read-only and read-write
-tiers, the key dialog has one kind of `mcp` key and these five tools are what it
-gets. Writing to Odoo means using an `rpc` key, whether through this project or
-something else.
+การอ่านอย่างเดียวไม่ใช่ค่าที่ปรับได้ ตอนสร้าง key ชนิด `mcp` บน 19.4 ไม่มี scope
+ให้เลือกเลย — ต่างจากบทความภายนอกที่เขียนว่ามีระดับ read-only กับ read-write
+ในหน้าจอสร้าง key มี `mcp` แบบเดียว และได้ 5 tools นี้เท่านั้น การเขียนลง Odoo
+ต้องใช้ key ชนิด `rpc` ไม่ว่าจะผ่าน project นี้หรืออย่างอื่น
 
-### Where it is better
+### จุดที่มันดีกว่า
 
-**It knows it is talking to an agent.** `retrieve_initial_context` returns the
-timezone, the current user, and the active company, along with a note that
-stored datetimes are UTC and should only be converted for display. Nothing here
-does that.
+**มันรู้ตัวว่ากำลังคุยกับ agent** `retrieve_initial_context` คืน timezone ผู้ใช้ปัจจุบัน
+และบริษัทที่ active มาให้ พร้อมกำชับว่าค่า datetime ที่เก็บไว้เป็น UTC และควรแปลง
+เฉพาะตอนแสดงผล — project นี้ไม่มีอะไรแบบนั้น
 
-**It refuses technical models.** Asking for `ir.model.fields` returns
-`The model ir.model.fields cannot be used by AI Agents`; the allowlist runs to
-116 models, only one of them under `ir.`. This project exposes whatever the
-configured account can reach.
+**มันปฏิเสธ technical model** ขอ `ir.model.fields` จะได้
+`The model ir.model.fields cannot be used by AI Agents` โดย allowlist มี 116 models
+และมีที่ขึ้นต้นด้วย `ir.` แค่ตัวเดียว ส่วน project นี้เปิดทุก model เท่าที่บัญชีที่ตั้งค่าไว้
+เข้าถึงได้
 
-**Nothing to run.** No deployment, no hosting, and no copy of the Odoo
-credentials outside Odoo.
+**ไม่ต้องรันอะไรเลย** ไม่ต้อง deploy ไม่ต้องมี hosting และไม่ต้องมีสำเนารหัส Odoo
+อยู่นอก Odoo
 
-### Where it will trip an agent up
+### จุดที่จะทำให้ agent สะดุด
 
-**`domain` is a string containing Python, not JSON.** The schema types it as
-`string` while the description says "Use an empty list", and the contents are
-evaluated as a Python literal:
+**`domain` เป็น string ที่บรรจุ Python ไม่ใช่ JSON** schema ระบุชนิดเป็น `string`
+ขณะที่ description เขียนว่า "Use an empty list" และเนื้อในถูก eval เป็น Python literal
 
 ```
 [["is_company","=",true]]                    -> "should be 'string'"
 "[\"|\",(\"is_company\",\"=\",true),...]"  -> malformed: Name(id='true')
-"[\"|\",(\"is_company\",\"=\",True),...]"  -> works
+"[\"|\",(\"is_company\",\"=\",True),...]"  -> ใช้ได้
 ```
 
-JSON's `true` fails; Python's `True` is required. An agent reading
-`"type": "string"` will reach for JSON first nearly every time. This project
-takes domains as real arrays.
+`true` ของ JSON พัง ต้องเป็น `True` แบบ Python — agent ที่เห็น `"type": "string"`
+จะเดาเป็น JSON ก่อนแทบทุกครั้ง ส่วน project นี้รับ domain เป็น array จริง ๆ
 
-**Output is Python `repr`, not JSON.** `read_group` returns `"[(False, 2)]"`.
+**output เป็น Python `repr` ไม่ใช่ JSON** `read_group` คืน `"[(False, 2)]"`
 
-**`limit` defaults to all.** Per its schema, an omitted limit returns
-everything — the same hazard this project now defaults to 50 to avoid. Not
-confirmed on a populated database.
+**`limit` default เป็นทั้งหมด** ตาม schema ของมัน ถ้าไม่ใส่ limit จะคืนทุกอย่าง —
+เป็นความเสี่ยงเดียวกับที่ project นี้เพิ่งแก้ด้วยการตั้ง default 50 ยังไม่ได้ยืนยันบน
+database ที่มีข้อมูลเยอะ
 
-### Choosing
+### เลือกยังไง
 
-Read-only work is better served by the built-in server: less to run, fewer
-places holding credentials, and a model allowlist this project lacks.
+งานที่อ่านอย่างเดียว MCP server ในตัวเหมาะกว่า มีของให้ดูแลน้อยกว่า มีที่เก็บ
+credential น้อยที่กว่า และมี allowlist ของ model ที่ project นี้ไม่มี
 
-Anything that writes needs an `rpc` key, which is what this project is for —
-along with several Odoo instances behind one endpoint, bounded reads, and
-domains that are ordinary JSON. They coexist: the two key types are strictly scoped, so an `rpc` key gets
-`401` from `/mcp` and an `mcp` key cannot authenticate over JSON-RPC. Connecting
-a client to both is a reasonable setup.
+งานที่ต้องเขียนต้องใช้ key ชนิด `rpc` ซึ่งคือสิ่งที่ project นี้มีไว้ให้ — รวมถึงกรณี
+ต่อ Odoo หลายตัวผ่าน endpoint เดียว การอ่านที่มีเพดาน และ domain ที่เป็น JSON ปกติ
+ทั้งสองอยู่ด้วยกันได้ เพราะ key ทั้งสองชนิดแบ่ง scope กันเข้มงวด — key `rpc` ยิง `/mcp`
+ได้ `401` ส่วน key `mcp` ก็ authenticate ผ่าน JSON-RPC ไม่ได้ การต่อ client เข้าทั้งสอง
+ตัวจึงเป็นการจัดวางที่สมเหตุสมผล
 
-## Deploying
+## เรื่อง deploy
 
-Give a deploy about ten seconds before testing it. Requests immediately after
-`wrangler deploy` can still land on an isolate running the previous version —
-an unbounded `search_read` returned 4,517 records once for exactly that reason,
-then 50 on every attempt after the rollout settled.
+หลัง deploy ให้รอสัก 10 วินาทีก่อนทดสอบ request ที่ยิงทันทีหลัง `wrangler deploy`
+ยังอาจไปตกที่ isolate ที่รันเวอร์ชันเก่าอยู่ — มีครั้งหนึ่ง `search_read` แบบไม่จำกัด
+คืนมา 4,517 record ด้วยเหตุผลนี้เป๊ะ ๆ แล้วได้ 50 ทุกครั้งหลังจาก rollout นิ่งแล้ว
