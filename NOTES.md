@@ -1,7 +1,17 @@
 # บันทึกจากการใช้งานจริง
 
-server ตัวนี้ทำอะไรได้ดีและไม่ดีบ้าง จากการทดสอบ tool ทุกตัวกับ Odoo ตัวจริง
-(SaaS 19.4 Enterprise) ผ่าน Worker ที่ deploy แล้ว
+server ตัวนี้ทำอะไรได้ดีและไม่ดีบ้าง จากการทดสอบ tool ทุกตัวกับ Odoo จริง
+
+วัดกับสามเครื่อง เพราะพฤติกรรมหลายอย่างต่างกันตามเวอร์ชันและแพลตฟอร์ม
+
+| | ใช้ทดสอบอะไร |
+| --- | --- |
+| **SaaS 19.4 Enterprise** | ทุกอย่างที่อ่านได้ ผ่าน Worker ที่ deploy จริง |
+| **19.0 Community** (ลงเอง) | สิ่งที่ต้องเขียนหรือลบ บน database ที่ทิ้งได้ |
+| **18.0** (self-hosted) | เส้นทาง fallback ของ `odoo_read_group` |
+
+ตรงไหนที่ผลต่างกันระหว่างเครื่อง เขียนกำกับไว้ — อย่าเอาผลจากเครื่องหนึ่งไปสรุป
+แทนอีกเครื่อง
 
 นี่คือข้อควรระวังตอนใช้งาน ไม่ใช่ changelog ส่วนใหญ่เป็นพฤติกรรมของ Odoo เองที่โผล่
 ออกมา ไม่ใช่บั๊กของ server ตัวนี้ — ซึ่งเป็นเหตุผลว่าทำไมยิ่งต้องจดไว้ เพราะ agent
@@ -64,9 +74,18 @@ html field คือค่าเข้าแล้ว — เขียน `"ok"`
 นั่นคือค่าเข้าไม่ใช่ถูกทิ้ง อย่างที่สองมันข้ามการอ่านกลับเมื่อเขียนเกิน 50 record
 เพื่อไม่ให้ call เดียวกลายเป็น unbounded read
 
-ที่น่ารู้คือ field เดียวกันอาจให้ผลต่างกันระหว่างสอง call — `is_company` ถูก `create`
-ทิ้ง แต่ `write` เก็บ ทำซ้ำได้ทุกครั้ง เหตุผลจะเป็นอะไรก็ตาม มันไม่ใช่สิ่งที่ agent
-เดาได้จาก schema ซึ่งคือเหตุผลทั้งหมดที่ต้องอ่านกลับแทนการเชื่อค่าที่ return มา
+ที่น่ารู้คือ field เดียวกันให้ผลต่างกันได้ทั้งระหว่าง call และระหว่างเวอร์ชัน
+
+| | `create` ด้วย `is_company: true` |
+| --- | --- |
+| SaaS 19.4 | ถูกทิ้ง — อ่านกลับได้ `false` |
+| 19.0 Community | เก็บ — อ่านกลับได้ `true` |
+
+และบน SaaS ตัวเดียวกัน `write` เก็บค่าให้ ทั้งที่ `create` ทิ้ง ทำซ้ำได้ทุกครั้ง
+
+เหตุผลจะเป็นอะไรก็ตาม มันไม่ใช่สิ่งที่ agent เดาได้จาก schema — `fields_get` บอกว่า
+`readonly: true` เหมือนกันหมด ซึ่งคือเหตุผลทั้งหมดที่ต้องอ่านกลับแทนการเชื่อค่าที่
+return มา และเป็นเหตุผลที่ห้ามเอาผลทดสอบจากเวอร์ชันหนึ่งไปสรุปแทนอีกเวอร์ชัน
 
 ### `odoo_read` กับ id ที่ไม่มี คืน `[]` ไม่ใช่ error
 
@@ -125,16 +144,21 @@ check_access → ถูกกันด้วยเหตุผลเดียว
 
 ปิด internal API ทั้งชุด ไม่ว่าผู้เรียกจะมีสิทธิ์แค่ไหน
 
-**ตาราง ACL ไม่ถูก expose ออกมาเลย**
+**ตาราง ACL ไม่ถูก expose — เฉพาะบน SaaS**
 
 ```
-ir.model.access → Object ir.model.access doesn't exist
-ir.rule         → Object ir.rule doesn't exist
+SaaS 19.4:      ir.model.access → Object ir.model.access doesn't exist
+                ir.rule         → Object ir.rule doesn't exist
+19.0 Community: ir.model.access → 171 แถว
+                ir.rule         → 42 แถว
 ```
 
-สังเกตว่าไม่ใช่ "ไม่มีสิทธิ์" แต่เป็น "ไม่มี object นี้" — Odoo ตัดมันออกจาก registry
-ฝั่ง RPC ผลคือเขียนทับสิทธิ์ของตัวเองผ่าน RPC ไม่ได้ ซึ่งปิดเส้นทางยกระดับสิทธิ์
-ที่อันตรายที่สุดไปแล้ว
+สังเกตว่าฝั่ง SaaS ไม่ใช่ "ไม่มีสิทธิ์" แต่เป็น "ไม่มี object นี้" คือถูกตัดออกจาก
+registry ฝั่ง RPC ไปเลย
+
+**แต่นี่ไม่ใช่พฤติกรรมของ Odoo 19 ทั่วไป** — บน 19.0 Community ที่ลงเอง ทั้งสอง
+ตารางอ่านได้ตามปกติ เป็นข้อจำกัดของแพลตฟอร์ม SaaS ไม่ใช่ของตัว Odoo เพราะฉะนั้น
+ถ้ารัน Odoo เอง อย่าไปคาดหวังชั้นป้องกันนี้
 
 ### ที่ยังเปิดอยู่
 
@@ -149,8 +173,19 @@ ir.rule         → Object ir.rule doesn't exist
 ทั้งหมดนี้เข้าถึงผ่าน `search_read` / `write` ซึ่งเป็น public method ปกติ — Odoo
 ตั้งใจปล่อยให้ระบบสิทธิ์เป็นตัวตัดสิน และเมื่อบัญชีเป็น admin ก็คือผ่านหมด
 
-(ไม่ได้ทดลองเขียนลง `ir.cron` หรือ `ir.actions.server` เพราะเป็น ERP ที่ใช้งานจริง
-ที่ยืนยันได้คืออ่านได้ ส่วนสิทธิ์เขียนยังไม่ได้วัด)
+**สิทธิ์เขียนวัดแล้วบน 19.0 Community** (ทดสอบบน database ที่ทิ้งได้ ไม่ได้แตะ ERP จริง)
+โดยใช้บัญชี admin ผ่าน RPC
+
+```
+odoo_write  ir.cron           → written: true   แก้ชื่องานตามตารางเวลาได้
+odoo_create ir.actions.server → id 90 สร้างได้ พร้อม field code ที่เก็บ Python
+```
+
+สองอย่างนี้ต่อกันได้เป็นการรันโค้ดบนเครื่อง Odoo: สร้าง server action ที่มีโค้ด
+แล้วตั้ง cron ให้เรียก ทั้งคู่เป็น public method บน model ที่ expose อยู่ ไม่มีอะไร
+ใน Odoo ขวางนอกจากสิทธิ์ของบัญชี นี่คือเหตุผลที่เป็นรูปธรรมที่สุดของ `BLOCKED_MODELS`
+
+(ลบ record ที่สร้างทดสอบและคืนชื่อ cron เดิมเรียบร้อยแล้ว)
 
 ### ทำไม `BLOCKED_MODELS` ไม่ซ้ำซ้อน
 
@@ -187,11 +222,26 @@ instance ที่ใช้ทดสอบ
 | `ai`, `ai_fields`, `ai_server_actions`, `ai_website` | `OEEL-1` |
 
 `OEEL-1` คือ Odoo Enterprise Edition License แปลว่า **ทางเลือกทั้งหมดในหัวข้อนี้
-ใช้ได้เฉพาะบน Enterprise** บน Community `/mcp` จะไม่มี และ key ชนิด `mcp` ก็ไม่น่า
-จะมีให้เลือก เพราะมาพร้อมโมดูลเดียวกัน (ยังไม่ได้ยืนยันบน Community จริง)
+ใช้ได้เฉพาะบน Enterprise**
 
-ชนิดของ key เก็บใน field `scope` ของ `res.users.apikeys` ซึ่งมีค่าเป็น `rpc` กับ
-`mcp` ตามที่สร้างไว้
+ยืนยันกับ 19.0 Community ที่ลงเองแล้ว
+
+```
+POST /mcp                      → 404
+module ที่ขึ้นต้นด้วย ai        → ไม่มีสักตัว
+```
+
+เรื่อง API key มีรายละเอียดที่เดาจากข้างนอกไม่ได้ field `scope` บน
+`res.users.apikeys` เป็น `char` และมีอยู่ใน `base` **ทั้งสองรุ่นเหมือนกัน** สิ่งที่
+`ai_mcp` เติมเข้ามาคือ field `scope` **ใน wizard ตอนสร้าง key**
+
+| wizard `res.users.apikeys.description` | field `scope` |
+| --- | --- |
+| 19.0 Community | ไม่มี |
+| SaaS 19.4 Enterprise | `selection: [["rpc","RPC"], ["mcp","MCP"]]` |
+
+ผลคือบน Community ตารางรองรับ scope อยู่แล้ว แต่หน้าจอไม่มีที่ให้เลือก key ที่
+สร้างจาก UI จึงเป็น `rpc` เสมอ ซึ่งพอสำหรับ project นี้เพราะใช้ `/jsonrpc`
 
 ### มันให้อะไรมา
 
@@ -262,17 +312,21 @@ project นี้จึงเป็นทางเดียวในสองท
 ได้ `401` ส่วน key `mcp` ก็ authenticate ผ่าน JSON-RPC ไม่ได้ การต่อ client เข้าทั้งสอง
 ตัวจึงเป็นการจัดวางที่สมเหตุสมผล
 
-## `read_group` หายไปแล้วใน Odoo 19
+## `read_group` หายไปใน saas~19.4 แต่ยังอยู่ใน 19.0
 
-เรียก `read_group` ตรง ๆ บน 19.4 จะได้
+เรียก `read_group` ตรง ๆ บน saas~19.4 จะได้
 
 ```
 builtins.AttributeError: The method 'res.partner.read_group' does not exist
 ```
 
+**แต่บน 19.0 Community มันยังอยู่** และ `formatted_read_group` ก็มีด้วย ทั้งสองชื่อ
+ใช้ได้ เพราะฉะนั้นการหายไปเกิดขึ้นระหว่าง 19.0 กับ saas~19.4 ไม่ใช่ "หายไปใน
+Odoo 19" อย่างที่สรุปกันง่าย ๆ — เลขเวอร์ชันของ SaaS เดินไปไกลกว่า release ที่ลงเอง
+
 ตัวที่ใช้แทนคือ `formatted_read_group` แต่เอกสารและตัวอย่าง Odoo เกือบทั้งหมด
 บนอินเทอร์เน็ตยังเป็นชื่อเดิม agent ที่เรียก method เองผ่าน `odoo_execute` จึงเลือก
-ชื่อที่ไม่มีอยู่แล้วแทบทุกครั้ง
+ชื่อที่ไม่มีอยู่แล้วบ่อยครั้ง
 
 `odoo_read_group` ห่อเรื่องนี้ไว้ — ลองชื่อใหม่ก่อน ถ้าเซิร์ฟเวอร์เป็นรุ่นเก่าจึงถอยไป
 ใช้ชื่อเดิมพร้อมแปลง `aggregates` เป็น `fields` ให้ agent ไม่ต้องรู้ว่าคุยกับ Odoo
@@ -283,11 +337,11 @@ builtins.AttributeError: The method 'res.partner.read_group' does not exist
 ยิง `read_group` ผ่าน RPC ไปที่ Odoo 18.0 (self-hosted) เทียบกับ SaaS 19.4 ตัวเดียวกับ
 ที่ใช้ทดสอบทั้งเอกสารนี้
 
-| | `read_group` | output |
+| | `read_group` | `formatted_read_group` |
 | --- | --- | --- |
-| Odoo 18.0 | ใช้ได้ | `is_company_count`, `__domain` |
-| SaaS 19.4 | `The method does not exist` | — |
-| SaaS 19.4 (`formatted_read_group`) | ใช้ได้ | `__count`, `__extra_domain` |
+| Odoo 18.0 | ใช้ได้ — `is_company_count`, `__domain` | ไม่มี |
+| **19.0 Community** | **ใช้ได้** — `is_company_count`, `__domain` | **ใช้ได้** — `__count`, `__extra_domain` |
+| SaaS 19.4 | ไม่มีแล้ว | ใช้ได้ — `__count`, `__extra_domain` |
 
 เส้นทาง fallback จึงไม่ใช่การเผื่อไว้ลอย ๆ — มันวิ่งจริงเมื่อปลายทางเป็น 18
 
