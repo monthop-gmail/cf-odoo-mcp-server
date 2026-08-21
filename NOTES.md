@@ -132,8 +132,13 @@ Five tools, all read-only:
 
 There are no write tools. `ai_tool_create`, `ai_tool_write` and
 `ai_tool_unlink` all return `The tool '...' doesn't exist`, the same answer an
-invented tool name gets. (Measured with a read-only `mcp` key; Odoo also offers
-a read-write scope, which may expose more.)
+invented tool name gets.
+
+Read-only is not a setting to change. Creating an `mcp` key on 19.4 offers no
+scope choice — unlike third-party write-ups describing read-only and read-write
+tiers, the key dialog has one kind of `mcp` key and these five tools are what it
+gets. Writing to Odoo means using an `rpc` key, whether through this project or
+something else.
 
 ### Where it is better
 
@@ -177,9 +182,9 @@ confirmed on a populated database.
 Read-only work is better served by the built-in server: less to run, fewer
 places holding credentials, and a model allowlist this project lacks.
 
-Use this one for what the built-in server does not do — writes, several Odoo
-instances behind one endpoint, bounded reads, and domains that are ordinary
-JSON. They coexist: the two key types are strictly scoped, so an `rpc` key gets
+Anything that writes needs an `rpc` key, which is what this project is for —
+along with several Odoo instances behind one endpoint, bounded reads, and
+domains that are ordinary JSON. They coexist: the two key types are strictly scoped, so an `rpc` key gets
 `401` from `/mcp` and an `mcp` key cannot authenticate over JSON-RPC. Connecting
 a client to both is a reasonable setup.
 
