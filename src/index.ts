@@ -6,23 +6,28 @@ import type { Env } from "./config";
 const MCP_ROUTE = "/mcp";
 
 /**
- * The server factory receives no env, so the handler is built on the first
- * request and reused. Bindings are identical for every request an isolate
- * serves, so capturing the first env is safe — and it avoids the race a
- * mutable module-level `currentEnv` would introduce between concurrent
- * requests.
+ * The server factory receives no env, so each handler closes over the env it
+ * was built with. Keying the cache on the env object itself keeps that closure
+ * honest: a request carrying a different env — the runtime does not promise one
+ * shared instance, and a stale closure silently loses every binding added since
+ * — builds its own handler instead of reusing one bound to the wrong bindings.
  */
-let handler: StatelessMcpHandler | undefined;
+const handlers = new WeakMap<object, StatelessMcpHandler>();
 
 function getHandler(env: Env): StatelessMcpHandler {
-  return (handler ??= createMcpHandler(
-    () => {
-      const server = new McpServer({ name: "odoo-mcp", version: "0.1.0" });
-      registerTools(server, env);
-      return server;
-    },
-    { route: MCP_ROUTE },
-  ));
+  let handler = handlers.get(env as object);
+  if (!handler) {
+    handler = createMcpHandler(
+      () => {
+        const server = new McpServer({ name: "odoo-mcp", version: "0.1.0" });
+        registerTools(server, env);
+        return server;
+      },
+      { route: MCP_ROUTE },
+    );
+    handlers.set(env as object, handler);
+  }
+  return handler;
 }
 
 /**

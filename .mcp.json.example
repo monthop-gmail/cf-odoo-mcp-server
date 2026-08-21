@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "odoo": {
+      "type": "streamable-http",
+      "url": "https://cf-odoo-mcp-server.<subdomain>.workers.dev/mcp",
+      "headers": { "Authorization": "Bearer <MCP_AUTH_TOKEN from .env>" }
+    }
+  }
+}
