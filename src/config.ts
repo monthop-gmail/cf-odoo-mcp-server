@@ -10,6 +10,17 @@ export interface Env {
    * unaffected either way.
    */
   ALLOWED_ORIGIN_HOSTNAMES?: string;
+  /**
+   * Comma-separated model patterns the tools refuse to touch, e.g.
+   * `ir.*,res.users`. A trailing `*` matches by prefix. Unset, nothing is
+   * blocked.
+   */
+  BLOCKED_MODELS?: string;
+  /**
+   * Comma-separated model patterns the tools are restricted to. When set, a
+   * model must match one of these as well as avoid `BLOCKED_MODELS`.
+   */
+  ALLOWED_MODELS?: string;
   /** JSON: `{"default_server":"prod","servers":{"prod":{url,db,username,password}}}` */
   ODOO_SERVERS?: string;
   /** Single-server fallback, mirroring the Python original's env vars. */
@@ -109,4 +120,56 @@ export function pickServer(
     );
   }
   return { name: resolved, server };
+}
+
+/**
+ * Which models the tools may touch.
+ *
+ * The configured Odoo account's permissions are the real boundary; this is a
+ * second, coarser one that an operator can set without touching Odoo. Useful
+ * for keeping an agent out of `ir.*` and `res.users` when the account it runs
+ * as is more privileged than the work requires.
+ */
+export interface ModelPolicy {
+  /** Empty means every model is in scope. */
+  allow: string[];
+  block: string[];
+}
+
+function parsePatterns(raw: string | undefined): string[] {
+  return (raw ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+export function loadModelPolicy(env: Env): ModelPolicy {
+  return {
+    allow: parsePatterns(env.ALLOWED_MODELS),
+    block: parsePatterns(env.BLOCKED_MODELS),
+  };
+}
+
+/** `ir.*` matches by prefix; anything else must match exactly. */
+function matches(pattern: string, model: string): boolean {
+  return pattern.endsWith("*")
+    ? model.startsWith(pattern.slice(0, -1))
+    : pattern === model;
+}
+
+export function isModelAllowed(policy: ModelPolicy, model: string): boolean {
+  if (policy.block.some((pattern) => matches(pattern, model))) return false;
+  if (policy.allow.length === 0) return true;
+  return policy.allow.some((pattern) => matches(pattern, model));
+}
+
+/** Throws when a model is out of scope, naming the setting that put it there. */
+export function assertModelAllowed(policy: ModelPolicy, model: string): void {
+  if (isModelAllowed(policy, model)) return;
+  const reason = policy.block.some((pattern) => matches(pattern, model))
+    ? "BLOCKED_MODELS"
+    : "ALLOWED_MODELS";
+  throw new ConfigError(
+    `Model '${model}' is out of scope for this server (${reason}).`,
+  );
 }

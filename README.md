@@ -57,6 +57,9 @@ Odoo ต้องเข้าถึงได้จากอินเทอร์
 | `odoo_delete` | `unlink` |
 | `odoo_execute` | method อะไรก็ได้ |
 | `odoo_fields_get` | `fields_get` |
+| `odoo_read_group` | `formatted_read_group` (ถอยไป `read_group` ถ้าเป็น Odoo รุ่นเก่า) |
+| `odoo_context` | ผู้ใช้ บริษัท timezone ภาษา |
+| `odoo_get_models` | รายชื่อ model ที่ใช้ได้ |
 | `odoo_version` | `common.version` |
 
 ## การตั้งค่า
@@ -66,10 +69,22 @@ Odoo ต้องเข้าถึงได้จากอินเทอร์
 | `MCP_AUTH_TOKEN` | **จำเป็น** bearer token ที่ผู้เรียกต้องแนบมา |
 | `ODOO_SERVERS` | JSON รองรับหนึ่งหรือหลาย server ถ้าตั้งไว้จะชนะตัวข้างล่าง |
 | `ODOO_URL` `ODOO_DB` `ODOO_USERNAME` `ODOO_PASSWORD` | ทางเลือกสำรองสำหรับ server เดียว |
+| `BLOCKED_MODELS` | ไม่บังคับ รายการ model ที่ทุก tool จะปฏิเสธ คั่นด้วย comma ลงท้าย `*` เพื่อจับแบบขึ้นต้น เช่น `ir.*,res.users*` ถ้าไม่ตั้งจะไม่บล็อกอะไรเลย |
+| `ALLOWED_MODELS` | ไม่บังคับ ถ้าตั้งไว้ model ต้องตรงรายการนี้ด้วยจึงจะใช้ได้ |
 | `ALLOWED_ORIGIN_HOSTNAMES` | ไม่บังคับ รายชื่อ hostname คั่นด้วย comma ที่ยอมให้ browser `Origin` เรียก `/mcp` ได้ หรือใส่ `*` ถ้าไม่ตั้ง จะรับเฉพาะ localhost กับ hostname `workers.dev` ของ Worker เอง — client ฝั่ง server ไม่ส่ง `Origin` มาอยู่แล้วจึงไม่ได้รับผลกระทบ |
 
 ควรใช้ **API key** ของ Odoo แทนรหัสผ่านบัญชี และให้สิทธิ์บัญชีนั้นเท่าที่ tool ต้องใช้จริง —
 `odoo_delete` กับ `odoo_write` เข้าถึงได้ทุกอย่างที่บัญชีนั้นเข้าถึงได้
+
+`BLOCKED_MODELS` เป็นรั้วชั้นที่สอง ตั้งได้โดยไม่ต้องไปแก้สิทธิ์ใน Odoo ค่าที่แนะนำ
+
+```
+BLOCKED_MODELS="ir.*,res.users*,res.groups*"
+```
+
+**ลงท้ายด้วย `*` ด้วย** — `res.users` เฉย ๆ จับได้แค่ตัวมันเอง `res.users.apikeys`
+ยังหลุดผ่าน ส่วน `odoo_context` ตั้งใจให้ข้ามรั้วนี้ เพราะมันอ่านแค่ตัวตนของ
+connection ที่มีอยู่แล้ว
 
 `ODOO_SERVERS` หน้าตาแบบนี้
 
