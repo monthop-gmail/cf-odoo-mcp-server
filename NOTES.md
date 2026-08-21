@@ -54,10 +54,13 @@ not exist on this version — it returns `Invalid field`.)
 Deleted, never existed, and invisible-to-this-user are indistinguishable.
 Use `odoo_search_count` to tell "gone" from "not permitted".
 
-### `odoo_search_read` has no default limit
+### `odoo_search_read` returns 50 records unless told otherwise
 
-Omitting `limit` returns every matching record. Harmless on a small database
-and a context-window hazard on a real one. Pass an explicit `limit`.
+Odoo imposes no limit of its own, so omitting `limit` used to return every
+matching record. It now defaults to 50. Raise it deliberately when you need
+more — `ir.model.fields` on a stock database holds over 4,500 rows, and an
+unbounded read of a model that size exhausts a caller's context well before
+Odoo would complain.
 
 ### `odoo_execute` calls arbitrary methods
 
@@ -70,9 +73,11 @@ note in the README.
 **Server-side connectors work.** Requests without an `Origin` header — every
 server-side MCP client — pass through.
 
-**Browser-based clients are refused.** A preflight from a browser origin gets
-`403`: the handler's `allowedOriginHostnames` defaults to localhost and the
-endpoint's own `workers.dev` hostname. Set that option to allow others.
+**Browser-based clients are refused unless configured.** A preflight from a
+browser origin gets `403` by default — the handler trusts only localhost and
+the endpoint's own `workers.dev` hostname. Set `ALLOWED_ORIGIN_HOSTNAMES` to a
+comma-separated list of hostnames, or `*`, to widen it. Origins outside the
+list still get `403`, and the bearer token is required either way.
 
 **Both accept types are required.** A client must send
 `Accept: application/json, text/event-stream`. Sending only the first, or
@@ -83,9 +88,13 @@ client offers `2026-07-28`.
 
 ## Not done yet
 
-Worth doing, in rough order of value to an agent:
+Have `odoo_create` and `odoo_write` read the record back and return it, so
+silently dropped fields become visible at the call site. This is the one that
+would have caught the `is_company` surprise above without a second call.
 
-1. Have `odoo_create` and `odoo_write` read the record back and return it, so
-   silently dropped fields become visible at the call site.
-2. Give `odoo_search_read` a default `limit`.
-3. Set `allowedOriginHostnames` if browser clients need to connect.
+## Deploying
+
+Give a deploy about ten seconds before testing it. Requests immediately after
+`wrangler deploy` can still land on an isolate running the previous version —
+an unbounded `search_read` returned 4,517 records once for exactly that reason,
+then 50 on every attempt after the rollout settled.

@@ -3,6 +3,13 @@ import type { OdooConfig, ServerConfig } from "./odoo";
 export interface Env {
   /** Shared secret required in the `Authorization: Bearer` header. */
   MCP_AUTH_TOKEN?: string;
+  /**
+   * Comma-separated hostnames whose browser `Origin` may call `/mcp`, or `*`
+   * to accept any. Unset, only localhost and this Worker's own `workers.dev`
+   * hostname are allowed; server-side clients send no Origin and are
+   * unaffected either way.
+   */
+  ALLOWED_ORIGIN_HOSTNAMES?: string;
   /** JSON: `{"default_server":"prod","servers":{"prod":{url,db,username,password}}}` */
   ODOO_SERVERS?: string;
   /** Single-server fallback, mirroring the Python original's env vars. */

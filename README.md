@@ -42,6 +42,7 @@ in front of it if yours is not already public.
 | `MCP_AUTH_TOKEN` | Required. Bearer token callers must present. |
 | `ODOO_SERVERS` | JSON, for one or more servers. Takes precedence. |
 | `ODOO_URL` `ODOO_DB` `ODOO_USERNAME` `ODOO_PASSWORD` | Single-server fallback. |
+| `ALLOWED_ORIGIN_HOSTNAMES` | Optional. Comma-separated hostnames whose browser `Origin` may call `/mcp`, or `*`. Unset, only localhost and this Worker's own `workers.dev` hostname are accepted. Server-side clients send no `Origin` and are unaffected. |
 
 Prefer an Odoo **API key** over an account password, and give the account only
 the access the tools actually need — `odoo_delete` and `odoo_write` reach whatever

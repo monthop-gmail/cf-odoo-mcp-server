@@ -23,11 +23,28 @@ function getHandler(env: Env): StatelessMcpHandler {
         registerTools(server, env);
         return server;
       },
-      { route: MCP_ROUTE },
+      { route: MCP_ROUTE, ...originOptions(env) },
     );
     handlers.set(env as object, handler);
   }
   return handler;
+}
+
+/**
+ * Browser clients are refused by default: the handler only trusts localhost and
+ * this Worker's own `workers.dev` hostname. Returning nothing keeps that
+ * default rather than widening it to `*` by accident.
+ */
+function originOptions(env: Env): { allowedOriginHostnames?: string[] | "*" } {
+  const raw = env.ALLOWED_ORIGIN_HOSTNAMES?.trim();
+  if (!raw) return {};
+  if (raw === "*") return { allowedOriginHostnames: "*" };
+
+  const hostnames = raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return hostnames.length > 0 ? { allowedOriginHostnames: hostnames } : {};
 }
 
 /**

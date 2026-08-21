@@ -19,6 +19,13 @@ const Domain = z
       "Prefix operators '&', '|' and '!' may appear as bare strings.",
   );
 
+/**
+ * Applied when `odoo_search_read` is called without a limit. Odoo itself
+ * imposes none, so the unbounded read of a production model that follows would
+ * exhaust the caller's context long before it failed on its own.
+ */
+const DEFAULT_LIMIT = 50;
+
 const Model = z.string().describe("Odoo model name (e.g. 'res.partner', 'sale.order')");
 const Ids = z.array(z.number().int()).describe("Record IDs");
 const Server = z
@@ -93,7 +100,15 @@ export function registerTools(server: McpServer, env: Env): void {
           .optional()
           .describe("Field names to return. Omit for all fields."),
         offset: z.number().int().default(0).describe("Number of records to skip"),
-        limit: z.number().int().optional().describe("Maximum number of records to return"),
+        limit: z
+          .number()
+          .int()
+          .default(DEFAULT_LIMIT)
+          .describe(
+            `Maximum number of records to return. Defaults to ${DEFAULT_LIMIT}; ` +
+              "raise it deliberately, since an unbounded read of a large model " +
+              "returns everything.",
+          ),
         order: z.string().optional().describe("Sort order (e.g. 'name asc, id desc')"),
       }),
     },

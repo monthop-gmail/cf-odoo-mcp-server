@@ -11,3 +11,7 @@ ODOO_PASSWORD="your-odoo-api-key"
 
 # ...or multiple servers (takes precedence over the four vars above)
 # ODOO_SERVERS='{"default_server":"prod","servers":{"prod":{"url":"https://odoo.example.com","db":"mydb","username":"user@example.com","password":"key"}}}'
+
+# Optional: let browser-based clients call /mcp. Server-side clients do not
+# need this. Comma-separated hostnames, or "*".
+# ALLOWED_ORIGIN_HOSTNAMES="claude.ai,chatgpt.com"
