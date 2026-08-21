@@ -178,6 +178,21 @@ Enterprise) จึงเทียบกันได้ตรง ๆ
 มันบอกตัวเองว่า `{"name": "Odoo", "version": "1.0.0"}` และ negotiate protocol
 `2025-11-25`
 
+**มันมาจาก module `ai_mcp` ซึ่งเป็น Enterprise** — ตรวจจาก `ir.module.module` บน
+instance ที่ใช้ทดสอบ
+
+| module | license |
+| --- | --- |
+| `ai_mcp` ("AI MCP Server") | `OEEL-1` |
+| `ai`, `ai_fields`, `ai_server_actions`, `ai_website` | `OEEL-1` |
+
+`OEEL-1` คือ Odoo Enterprise Edition License แปลว่า **ทางเลือกทั้งหมดในหัวข้อนี้
+ใช้ได้เฉพาะบน Enterprise** บน Community `/mcp` จะไม่มี และ key ชนิด `mcp` ก็ไม่น่า
+จะมีให้เลือก เพราะมาพร้อมโมดูลเดียวกัน (ยังไม่ได้ยืนยันบน Community จริง)
+
+ชนิดของ key เก็บใน field `scope` ของ `res.users.apikeys` ซึ่งมีค่าเป็น `rpc` กับ
+`mcp` ตามที่สร้างไว้
+
 ### มันให้อะไรมา
 
 5 tools อ่านอย่างเดียวทั้งหมด
@@ -234,8 +249,12 @@ database ที่มีข้อมูลเยอะ
 
 ### เลือกยังไง
 
-งานที่อ่านอย่างเดียว MCP server ในตัวยังเหมาะกว่าถ้าไม่อยากดูแลอะไรเลย — ไม่ต้อง
-deploy ไม่ต้องมีที่เก็บ credential เพิ่ม และปลอดภัยตั้งแต่แกะกล่องโดยไม่ต้องตั้งค่า
+**ถ้าเป็น Community ก็ไม่มีอะไรให้เลือกตั้งแต่แรก** — `ai_mcp` เป็น Enterprise
+project นี้จึงเป็นทางเดียวในสองทางที่ใช้ได้
+
+บน Enterprise งานที่อ่านอย่างเดียว MCP server ในตัวยังเหมาะกว่าถ้าไม่อยากดูแลอะไรเลย
+— ไม่ต้อง deploy ไม่ต้องมีที่เก็บ credential เพิ่ม และปลอดภัยตั้งแต่แกะกล่องโดยไม่
+ต้องตั้งค่า
 
 งานที่ต้องเขียนต้องใช้ key ชนิด `rpc` ซึ่งคือสิ่งที่ project นี้มีไว้ให้ — รวมถึงกรณี
 ต่อ Odoo หลายตัวผ่าน endpoint เดียว การอ่านที่มีเพดาน และ domain ที่เป็น JSON ปกติ
@@ -259,8 +278,26 @@ builtins.AttributeError: The method 'res.partner.read_group' does not exist
 ใช้ชื่อเดิมพร้อมแปลง `aggregates` เป็น `fields` ให้ agent ไม่ต้องรู้ว่าคุยกับ Odoo
 เวอร์ชันอะไร
 
-output ก็ต่างกัน: `formatted_read_group` แนบ `__extra_domain` มาให้ในแต่ละกลุ่ม
-ซึ่งเอาไปใช้เป็น domain ต่อได้เลยถ้าจะเจาะดูรายละเอียดในกลุ่มนั้น
+### ทดสอบ fallback กับ Odoo 18 จริงแล้ว
+
+ยิง `read_group` ผ่าน RPC ไปที่ Odoo 18.0 (self-hosted) เทียบกับ SaaS 19.4 ตัวเดียวกับ
+ที่ใช้ทดสอบทั้งเอกสารนี้
+
+| | `read_group` | output |
+| --- | --- | --- |
+| Odoo 18.0 | ใช้ได้ | `is_company_count`, `__domain` |
+| SaaS 19.4 | `The method does not exist` | — |
+| SaaS 19.4 (`formatted_read_group`) | ใช้ได้ | `__count`, `__extra_domain` |
+
+เส้นทาง fallback จึงไม่ใช่การเผื่อไว้ลอย ๆ — มันวิ่งจริงเมื่อปลายทางเป็น 18
+
+ชื่อ key ที่คืนมาต่างกันด้วย ไม่ใช่แค่ชื่อ method: 18 คืนชื่อนับเป็น
+`<field>_count` และ domain ของกลุ่มเป็น `__domain` ส่วน 19 เป็น `__count` กับ
+`__extra_domain` ตัว tool ส่งผ่านตามที่ Odoo คืนมาโดยไม่แปลงให้เหมือนกัน ผู้เรียก
+ที่ต้องรองรับทั้งสองรุ่นจึงต้องอ่านทั้งสองแบบ
+
+`__extra_domain` (และ `__domain` บน 18) เอาไปใช้เป็น domain ต่อได้เลยถ้าจะเจาะดู
+รายละเอียดในกลุ่มนั้น
 
 ## เรื่อง deploy
 

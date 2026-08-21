@@ -20,7 +20,10 @@ Odoo 19 ออก API key ได้ 2 scope และใช้แทนกัน
 การแบ่ง scope เข้มงวดทั้งสองทาง: key ชนิด `rpc` ยิง `/mcp` จะได้ `401`
 ส่วน key ชนิด `mcp` ก็ authenticate ผ่าน JSON-RPC ไม่ได้
 
-**เพราะฉะนั้นคุณอาจไม่ต้องใช้ project นี้เลยก็ได้** ถ้า agent ของคุณอ่านอย่างเดียว
+MCP server ในตัวมาจาก module `ai_mcp` ซึ่งเป็น **Enterprise** (`OEEL-1`) — ถ้าใช้
+Odoo Community จะไม่มี `/mcp` และไม่มี key ชนิด `mcp` ให้เลือก ข้ามหัวข้อนี้ไปได้เลย
+
+**ถ้าใช้ Enterprise และ agent ของคุณอ่านอย่างเดียว คุณอาจไม่ต้องใช้ project นี้เลยก็ได้**
 MCP server ในตัวของ Odoo ไม่ต้อง deploy ไม่ต้องหา hosting และไม่ต้องเอารหัส Odoo
 ไปวางไว้ที่อื่น — ชี้ client ไปที่ `https://<odoo-ของคุณ>/mcp` พร้อม key ชนิด `mcp` ก็จบ
 แถมมันยังปฏิเสธ technical model ให้ด้วย ซึ่งเป็น guardrail ที่ project นี้ไม่มี
