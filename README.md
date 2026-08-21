@@ -109,6 +109,12 @@ A shared token is appropriate for a personal or internal server. For per-user
 identity, put the [Workers OAuth Provider](https://github.com/cloudflare/workers-oauth-provider)
 in front instead.
 
+## Field notes
+
+[NOTES.md](NOTES.md) records what was verified against a live Odoo instance and
+the caveats that matter when an AI agent drives these tools — notably that Odoo
+silently discards writes to readonly fields.
+
 ## License
 
 MIT
