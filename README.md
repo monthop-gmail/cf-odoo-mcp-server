@@ -8,6 +8,32 @@ It fits comfortably in the Workers free tier.
 Ported from [odoo-mcp-claude](https://github.com/monthop-gmail/odoo-mcp-claude), which
 runs the same ten tools as a Python process over XML-RPC.
 
+## Odoo 19 has two API key types — check which one you need
+
+Odoo 19 issues API keys in two scopes, and they are not interchangeable:
+
+| Key type | Speaks to | What you get |
+| --- | --- | --- |
+| **`mcp`** | Odoo's own `/mcp` endpoint | A built-in MCP server. Five tools, **read-only**. |
+| **`rpc`** | `/jsonrpc` | Full ORM access. **This project uses this one.** |
+
+The scoping is strict: an `rpc` key gets `401` from `/mcp`, and an `mcp` key
+fails to authenticate over JSON-RPC.
+
+**So you may not need this project at all.** If your agent only reads, Odoo's
+built-in server needs no deployment, no hosting, and no copy of your Odoo
+credentials anywhere else — point your client at `https://<your-odoo>/mcp` with
+an `mcp` key and you are done. It also refuses technical models outright, a
+guardrail this project does not have.
+
+Reach for this project when you need what the built-in one does not offer:
+creating, updating, or deleting records; several Odoo instances behind one
+endpoint; or a bounded default on reads. The two can run side by side.
+
+[NOTES.md](NOTES.md#compared-with-odoos-built-in-mcp-server) has the full
+comparison, including a schema quirk in the built-in server that will trip an
+agent up.
+
 ## Why JSON-RPC instead of XML-RPC
 
 Python's `xmlrpc.client` needs raw sockets, which the Workers runtime does not
