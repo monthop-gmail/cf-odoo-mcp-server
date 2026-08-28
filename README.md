@@ -9,6 +9,50 @@
 ซึ่งเป็น Python process คุยผ่าน XML-RPC — 10 tools แรกยกมาจากที่นั่น ส่วน
 `odoo_read_group` `odoo_context` และ `odoo_get_models` เพิ่มทีหลัง
 
+## แผนที่ POC — ทดลองอะไรไปแล้วบ้าง
+
+โจทย์คือ "ให้ AI ตัวไหนก็ได้คุยกับ Odoo" ซึ่งกลายเป็นการทดลองหลายเส้นทาง เพราะ
+แต่ละ client ส่ง credential ได้ไม่เหมือนกัน และ Odoo บางแบบก็เอาออกเน็ตไม่ได้
+
+| client | ต่อกับ | auth | ผล |
+| --- | --- | --- | --- |
+| Claude Code | repo นี้ (Cloudflare Worker) | bearer header | ✅ 13 tools |
+| Claude chat | repo นี้ | **OAuth (DCR)** | ✅ 13 tools |
+| ChatGPT | [odoo-mcp-chatgpt](https://github.com/monthop-gmail/odoo-mcp-chatgpt) (Docker + ท่อ OpenAI) | ท่อจัดการให้ | ✅ 13 tools |
+| Claude chat | `/mcp` ในตัวของ Odoo | — | ❌ Odoo ไม่ได้ทำ OAuth ให้ |
+| ChatGPT | repo นี้ | bearer header | ⬜ ยังไม่ทดสอบ |
+| ChatGPT | `/mcp` ในตัวของ Odoo | bearer header | ⬜ ยังไม่ทดสอบ |
+
+ฝั่ง Odoo ทดสอบกับสามเครื่อง — **SaaS 19.4 Enterprise**, **19.0 Community** ที่ลงเอง
+และ **18.0** สำหรับเส้นทาง fallback ของ `odoo_read_group` พฤติกรรมต่างกันจริงหลายจุด
+จนต้องเขียนแยกไว้ทุกครั้งว่าผลไหนมาจากเครื่องไหน
+
+## สาม repo ต่างกันยังไง
+
+| repo | รันที่ไหน | client หลัก | Odoo ต้อง public |
+| --- | --- | --- | --- |
+| [odoo-mcp-claude](https://github.com/monthop-gmail/odoo-mcp-claude) | Python process | ตัวตั้งต้น (XML-RPC) | ใช่ |
+| **cf-odoo-mcp-server** (นี่) | Cloudflare edge | Claude Code · Claude chat | ใช่ |
+| [odoo-mcp-chatgpt](https://github.com/monthop-gmail/odoo-mcp-chatgpt) | Docker ข้าง Odoo | ChatGPT · Codex | **ไม่ต้อง** |
+
+สองตัวหลังให้ tool ชุดเดียวกันและตั้งใจให้พฤติกรรมตรงกัน เลือกตามว่า Odoo ของคุณ
+ออกอินเทอร์เน็ตได้หรือไม่ ไม่ใช่ตามว่าใช้ AI ตัวไหน
+
+## บทเรียนที่ได้ — "สำเร็จแต่ไม่จริง"
+
+สามในสี่ของบั๊กที่เจอเป็นเรื่องเดียวกัน คือ **งานที่รายงานว่าสำเร็จ แต่ผลไม่ตรงกับ
+ที่สั่ง และไม่มีอะไรเตือน** ซึ่งเป็นความล้มเหลวที่แย่ที่สุดสำหรับ agent เพราะมันจะ
+รายงานต่อผู้ใช้ว่าเรียบร้อยดี
+
+| อาการ | ทางแก้ |
+| --- | --- |
+| Odoo ทิ้งค่าที่เขียนลง readonly field เงียบ ๆ | `fields_not_applied` |
+| อ่านมาไม่ครบแต่ดูเหมือนครบ | เพดาน 50 ของ `odoo_search_read` |
+| นับกลุ่มได้ไม่ครบแล้วสรุปยอดผิด | `has_more` + `total_records` ของ `odoo_read_group` |
+
+ข้อสุดท้ายเจอจากการใช้งานจริงบน Claude chat ไม่ใช่จากการทดสอบเอง — curl ไม่เคยขอ
+ให้ใครสรุปยอดจากผลที่ถูกตัด รายละเอียดทั้งหมดอยู่ใน [NOTES.md](NOTES.md)
+
 ## Odoo 19 **Enterprise** มี API key 2 ชนิด — เช็คก่อนว่าต้องใช้อันไหน
 
 หัวข้อนี้ใช้กับ **Enterprise เท่านั้น** ถ้าใช้ Community ข้ามไปได้เลย — มีแต่ key
