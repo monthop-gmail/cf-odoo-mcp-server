@@ -65,7 +65,7 @@ Odoo ต้องเข้าถึงได้จากอินเทอร์
 | `odoo_delete` | `unlink` |
 | `odoo_execute` | **public method** ใดก็ได้ (Odoo กัน private method เอง) |
 | `odoo_fields_get` | `fields_get` |
-| `odoo_read_group` | `formatted_read_group` (ถอยไป `read_group` ถ้าเป็น Odoo รุ่นเก่า) |
+| `odoo_read_group` | `formatted_read_group` (ถอยไป `read_group` ถ้าเป็น Odoo รุ่นเก่า) — บอก `has_more` เมื่อผลถูกตัด |
 | `odoo_context` | ผู้ใช้ บริษัท timezone ภาษา |
 | `odoo_get_models` | รายชื่อ model ที่ใช้ได้ — **ต้องสิทธิ์ Access Rights** ดูหมายเหตุใต้ตาราง |
 | `odoo_version` | `common.version` |

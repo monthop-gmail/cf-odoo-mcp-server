@@ -451,19 +451,51 @@ export function registerTools(server: McpServer, env: Env): void {
             "What to compute per group: '__count', or 'field:agg' such as " +
               "'amount_total:sum', 'amount_total:avg', 'id:max'.",
           ),
-        limit: z.number().int().optional().describe("Maximum number of groups to return"),
+        limit: z
+          .number()
+          .int()
+          .optional()
+          .describe(
+            "Maximum number of groups to return. When it truncates the result, " +
+              "the reply carries has_more and total_records — use total_records " +
+              "rather than summing the groups shown.",
+          ),
         offset: z.number().int().default(0).describe("Number of groups to skip"),
         order: z.string().optional().describe("Sort order over the grouped result"),
       }),
       annotations: { readOnlyHint: true },
     },
     async ({ server: name, model, domain, groupby, aggregates, limit, offset, order }) =>
-      run(() => {
-        const kwargs: Record<string, unknown> = { offset };
-        if (limit !== undefined) kwargs.limit = limit;
-        if (order !== undefined) kwargs.order = order;
+      run(async () => {
         const { name: key, server } = targetFor(model, name);
-        return groupBy(key, server, model, domain, groupby, aggregates, kwargs);
+
+        const kwargs: Record<string, unknown> = { offset };
+        if (order !== undefined) kwargs.order = order;
+        // Ask for one more group than requested. If it comes back, the caller is
+        // seeing a partial picture -- and a partial picture is indistinguishable
+        // from a complete one once the rows are on screen, which is how a
+        // truncated grouping turns into a wrong total.
+        if (limit !== undefined) kwargs.limit = limit + 1;
+
+        const rows = (await groupBy(
+          key, server, model, domain, groupby, aggregates, kwargs,
+        )) as Record<string, unknown>[];
+
+        if (limit === undefined || rows.length <= limit) {
+          return { groups: rows };
+        }
+
+        // Only now is the extra round trip worth it: the caller needs a total
+        // that does not come from summing rows it cannot see.
+        const total = await execute<number>(key, server, model, "search_count", [domain]);
+        return {
+          groups: rows.slice(0, limit),
+          has_more: true,
+          total_records: total,
+          warning:
+            `Showing ${limit} of more groups. Summing the rows above does not give ` +
+            `the total — ${total} records match this domain. Raise 'limit' to see the rest.`,
+        };
       }),
   );
 
