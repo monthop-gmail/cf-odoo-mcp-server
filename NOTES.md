@@ -480,6 +480,38 @@ module ที่ขึ้นต้นด้วย ai        → ไม่มี�
 เป็นความเสี่ยงเดียวกับที่ project นี้เพิ่งแก้ด้วยการตั้ง default 50 ยังไม่ได้ยืนยันบน
 database ที่มีข้อมูลเยอะ
 
+### client ไหนต่อ `/mcp` ของ Odoo ได้บ้าง
+
+Odoo ทำ `/mcp` มาให้ใช้กับ client ที่ตั้ง header ได้เท่านั้น ไม่ได้ทำ OAuth ให้เลย
+ตรวจกับ SaaS 19.4 Enterprise
+
+```
+POST /mcp  →  401
+              www-authenticate: Bearer        ← มีแค่คำว่า Bearer เปล่า ๆ
+              content-type: text/html         ← ตอบเป็น HTML ไม่ใช่ JSON
+
+/.well-known/oauth-protected-resource/mcp    404
+/.well-known/oauth-protected-resource        404
+/.well-known/oauth-authorization-server      404
+/.well-known/openid-configuration            404
+```
+
+**เป็นอาการเดียวกับที่ project นี้เคยเป็นก่อนใส่ OAuth เป๊ะ** — 401 ที่ไม่มี
+`resource_metadata` ชี้ทาง แล้ว well-known ก็ 404 ทุกเส้น ผลคือ Claude หา
+authorization server ไม่เจอ ต่างกันตรงที่ของเราแก้ได้เพราะเป็นโค้ดเรา ส่วน
+`/mcp` ของ Odoo อยู่ในโมดูล `ai_mcp` ที่เป็น Enterprise
+
+| client | ต่อ `/mcp` ของ Odoo ตรง ๆ |
+| --- | --- |
+| Claude Code | ได้ — ตั้ง header ใน `.mcp.json` |
+| ChatGPT (custom connector) | น่าจะได้ ถ้าตั้ง header ได้ — ยังไม่ได้ทดสอบ |
+| **Claude chat** | **ไม่ได้** จนกว่า `static_headers` จะออกจาก beta |
+
+ทางอ้อมคือเขียน Worker บาง ๆ ที่รับ OAuth จาก Claude แล้ว proxy ไป `/mcp` ของ Odoo
+พร้อมแนบ key ให้ แต่ได้แค่ 5 tools อ่านอย่างเดียวของ Odoo เอง และยังต้องเจอกับดัก
+`domain` ที่เป็น Python ในสตริง — เทียบกับ 13 tools ของ project นี้ที่ Claude chat
+ต่อได้อยู่แล้ว จึงไม่คุ้ม
+
 ### เลือกยังไง
 
 **ถ้าเป็น Community ก็ไม่มีอะไรให้เลือกตั้งแต่แรก** — `ai_mcp` เป็น Enterprise
