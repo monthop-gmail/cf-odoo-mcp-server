@@ -6,6 +6,27 @@
   "observability": { "enabled": true },
   // เก็บ OAuth client, grant และ token — ใช้เฉพาะเส้นทาง OAuth
   // ทาง static bearer ไม่แตะ KV เลย
+  // endpoint นี้เป็น public — จำกัดอัตราไว้สองจุดที่ต่างกัน
+  //
+  // WAF rate limiting ของ Cloudflare ทำงานระดับ zone จึงใช้กับ workers.dev ไม่ได้
+  // ต้องใช้ binding นี้แทน ซึ่งตั้งในไฟล์นี้ ไม่ต้องไปกดใน dashboard
+  //
+  // period ใส่ได้แค่ 10 หรือ 60 วินาที และลิมิตเป็น "ต่อ location ของ Cloudflare"
+  // ไม่ใช่ทั่วโลก — ตัวเลขจริงที่ผ่านได้จึงสูงกว่านี้ตามจำนวน colo ที่ผู้เรียกกระจายไป
+  "ratelimits": [
+    {
+      // ทุก request ที่เข้า /mcp — กัน agent ที่วนลูปยิงจน Odoo ล่ม
+      "name": "MCP_LIMIT",
+      "namespace_id": "1001",
+      "simple": { "limit": 120, "period": 60 }
+    },
+    {
+      // เฉพาะการส่งฟอร์มหน้า consent — นี่คือจุดเดียวที่เดา MCP_AUTH_TOKEN ได้
+      "name": "AUTH_LIMIT",
+      "namespace_id": "1002",
+      "simple": { "limit": 10, "period": 60 }
+    }
+  ],
   "kv_namespaces": [
     { "binding": "OAUTH_KV", "id": "af0f2880fe8f4528ad6bedec2aa33fe3" }
   ]

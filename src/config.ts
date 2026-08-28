@@ -1,6 +1,10 @@
 import type { OdooConfig, ServerConfig } from "./odoo";
 
 export interface Env {
+  /** จำกัดอัตราของทุก request ที่เข้า /mcp — ไม่มีตอนรัน wrangler dev บางโหมด */
+  MCP_LIMIT?: RateLimit;
+  /** จำกัดอัตราการส่งฟอร์มหน้า consent ซึ่งเป็นจุดที่เดา token ได้ */
+  AUTH_LIMIT?: RateLimit;
   /** Shared secret required in the `Authorization: Bearer` header. */
   MCP_AUTH_TOKEN?: string;
   /**

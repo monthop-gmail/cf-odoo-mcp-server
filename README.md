@@ -136,6 +136,7 @@ Administrator บัญชีสิทธิ์ต่ำตามที่แน
 | `BLOCKED_MODELS` | ไม่บังคับ รายการ model ที่ทุก tool จะปฏิเสธ คั่นด้วย comma ลงท้าย `*` เพื่อจับแบบขึ้นต้น เช่น `ir.*,res.users*` ถ้าไม่ตั้งจะไม่บล็อกอะไรเลย |
 | `ALLOWED_MODELS` | ไม่บังคับ ถ้าตั้งไว้ model ต้องตรงรายการนี้ด้วยจึงจะใช้ได้ |
 | `OAUTH_KV` | **จำเป็น** KV namespace เก็บ client/grant/token ของ OAuth (ผูกใน `wrangler.jsonc`) |
+| `MCP_LIMIT` `AUTH_LIMIT` | Rate limiting binding ผูกใน `wrangler.jsonc` — **อ่านข้อจำกัดที่วัดได้ก่อนพึ่งพา** |
 | `ALLOWED_ORIGIN_HOSTNAMES` | ไม่บังคับ รายชื่อ hostname คั่นด้วย comma ที่ยอมให้ browser `Origin` เรียก `/mcp` ได้ หรือใส่ `*` ถ้าไม่ตั้ง จะรับเฉพาะ localhost กับ hostname `workers.dev` ของ Worker เอง — client ฝั่ง server ไม่ส่ง `Origin` มาอยู่แล้วจึงไม่ได้รับผลกระทบ |
 
 ควรใช้ **API key** ของ Odoo แทนรหัสผ่านบัญชี และ **อย่าใช้บัญชี admin** —
@@ -159,6 +160,25 @@ Odoo กัน private method ให้เองทุกแพลตฟอร�
 
 รายละเอียดที่วัดมาทั้งสองแพลตฟอร์มอยู่ใน
 [NOTES.md](NOTES.md#odoo-กันอะไรให้แล้วบ้างใน-rpc)
+
+### Rate limiting — ผูกไว้แล้วแต่ยังกันไม่ได้จริง
+
+`wrangler.jsonc` ผูก Workers Rate Limiting binding ไว้สองตัว — `MCP_LIMIT`
+(120/60s ที่ `/mcp`) กับ `AUTH_LIMIT` (10/60s ที่หน้า consent) key เป็น
+`CF-Connecting-IP` ซึ่ง Cloudflare เขียนทับเสมอ ปลอมไม่ได้
+
+**แต่ทดสอบแล้วมันไม่ปฏิเสธ request ที่ยิงมาแยกกัน** ยิง `/authorize` 60 ครั้ง
+ทั้งที่ลิมิต 10 ก็ไม่เจอ `429` สักครั้ง ขณะที่เรียก `limit()` รวดใน request เดียว
+ปฏิเสธหลังครั้งที่ 11 ตามที่ควร ไล่ตัดสาเหตุแล้วไม่ใช่เรื่อง key และ binding
+มาถึงโค้ดจริง — เหลือคำอธิบายเดียวคือ counter แยกตาม isolate แล้ว sync ไม่ทัน
+ซึ่งตรงกับที่เอกสาร Cloudflare เตือนเองว่า *permissive, eventually consistent*
+
+**อย่าพึ่งมันเป็นด่านเดียว** โค้ดยังอยู่เพราะถูกต้องและไม่มีต้นทุน อาจทำงานตอน
+โดนยิงหนักกว่านี้ ถ้าต้องการการกันที่แม่นจริงต้องใช้ Durable Object นับแทน หรือ
+ผูกโดเมนของตัวเองแล้วใช้ WAF ของ Cloudflare ซึ่งทำงานระดับ zone จึงใช้กับ
+`workers.dev` ไม่ได้
+
+ตัวเลขที่วัดได้อยู่ใน [NOTES.md](NOTES.md#rate-limiting-ที่ผูกไว้แล้วแต่ยังกันไม่ได้จริง)
 
 `ODOO_SERVERS` หน้าตาแบบนี้
 

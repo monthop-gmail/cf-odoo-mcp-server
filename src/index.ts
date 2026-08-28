@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { registerTools } from "./tools";
 import { oauthDefaultHandler, type OAuthEnv } from "./oauth";
 import { json, secretsMatch } from "./http";
+import { overLimit } from "./rate-limit";
 import type { Env } from "./config";
 
 const MCP_ROUTE = "/mcp";
@@ -92,6 +93,15 @@ export default {
     const { pathname } = new URL(request.url);
 
     if (pathname === MCP_ROUTE) {
+      // ก่อนแตะ auth หรือ Odoo — จำกัดอัตราไว้ก่อน ทั้ง request ที่ผ่านและไม่ผ่าน
+      // นับรวมกัน เพราะทั้งการเดา token และ agent ที่วนลูปต่างก็คือ "ยิงถี่เกินไป"
+      const limited = await overLimit(
+        env.MCP_LIMIT,
+        request,
+        "Too many requests to /mcp. Slow down and retry in a minute.",
+      );
+      if (limited) return limited;
+
       // Refuse to serve rather than fall open when the secret is unset. Without
       // it no OAuth grant can be issued either, since the consent screen needs
       // it — this just fails earlier and more clearly.

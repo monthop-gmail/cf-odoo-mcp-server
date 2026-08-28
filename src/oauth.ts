@@ -11,6 +11,7 @@
 import type { AuthRequest, OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { Env } from "./config";
 import { json, secretsMatch } from "./http";
+import { overLimit } from "./rate-limit";
 
 /** Bindings the OAuth provider adds on top of the Worker's own. */
 export interface OAuthEnv extends Env {
@@ -113,6 +114,14 @@ async function handleAuthorize(request: Request, env: OAuthEnv): Promise<Respons
     const client = await env.OAUTH_PROVIDER.lookupClient(authRequest.clientId);
     return consentPage(authRequest, client?.clientName ?? authRequest.clientId);
   }
+
+  // การส่งฟอร์มคือจุดเดียวที่เดา MCP_AUTH_TOKEN ได้ จึงจำกัดแน่นกว่า /mcp มาก
+  const limited = await overLimit(
+    env.AUTH_LIMIT,
+    request,
+    "Too many authorization attempts. Retry in a minute.",
+  );
+  if (limited) return limited;
 
   const form = await request.formData();
   const raw = form.get("auth_request");
