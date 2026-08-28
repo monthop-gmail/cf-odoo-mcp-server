@@ -28,6 +28,7 @@ server ตัวนี้ทำอะไรได้ดีและไม่ด�
 - [ใช้บัญชีเฉพาะแทน admin](#ใช้บัญชีเฉพาะแทน-admin) — สูตรบัญชีสิทธิ์ต่ำที่ทดสอบแล้ว
 - [เทียบกับ MCP server ในตัวของ Odoo](#เทียบกับ-mcp-server-ในตัวของ-odoo) — ของ Odoo เองทำอะไรได้ (Enterprise เท่านั้น)
 - [`read_group` หายไปใน saas~19.4 แต่ยังอยู่ใน 19.0](#read_group-หายไปใน-saas194-แต่ยังอยู่ใน-190) — ต่างกันระหว่างเวอร์ชัน และเส้นทาง fallback
+- [ทำไม Claude chat ต้องใช้ OAuth](#ทำไม-claude-chat-ต้องใช้-oauth) — connector ตั้ง header ไม่ได้ จึงต้องมี OAuth
 - [เรื่อง deploy](#เรื่อง-deploy) — ข้อควรระวังตอนยิงทดสอบหลัง deploy
 
 ## อ่านเลขเวอร์ชันยังไง
@@ -497,6 +498,64 @@ Odoo 19" อย่างที่สรุปกันง่าย ๆ — เ�
 
 `__extra_domain` (และ `__domain` บน 18) เอาไปใช้เป็น domain ต่อได้เลยถ้าจะเจาะดู
 รายละเอียดในกลุ่มนั้น
+
+## ทำไม Claude chat ต้องใช้ OAuth
+
+Claude Code ตั้ง header ใน `.mcp.json` ได้ จึงใช้ static bearer ตรง ๆ แต่ connector
+บน claude.ai ตั้งไม่ได้ ในหน้า Add custom connector มีแค่ OAuth กับ None ไม่มีช่อง
+ใส่ token
+
+เอกสารระบุว่า `static_headers` (ใส่ API key เป็น request header) **มีแล้วแต่ยัง
+beta** ต้องขอ early access ถ้าบัญชีไหนมี ก็ข้ามเรื่อง OAuth ทั้งหมดนี้ไปได้เลย
+
+### อาการตอนที่ยังไม่มี OAuth
+
+หน้าจอ Claude ขึ้น "Detected" ข้าง *Always required* เพราะยิงมาแล้วเจอ 401 ของเรา
+แต่ต่อไม่ได้ เพราะ 401 เดิมมีแค่
+
+```
+WWW-Authenticate: Bearer realm="odoo-mcp"
+```
+
+Claude จึงไปเดาต่อที่ `/.well-known/oauth-protected-resource/mcp` แล้ว
+`/.well-known/oauth-protected-resource` ซึ่ง **404 ทั้งคู่** พอหา authorization
+server ไม่เจอก็จบด้วย "Couldn't reach the MCP server"
+
+หลังใส่ `@cloudflare/workers-oauth-provider` 401 กลายเป็น
+
+```
+WWW-Authenticate: Bearer realm="OAuth",
+  resource_metadata="https://<host>/.well-known/oauth-protected-resource/mcp"
+```
+
+`resource_metadata` คือชิ้นที่ขาดไป
+
+### เก็บสองทางไว้ ไม่แทนที่
+
+request ที่พก static bearer ถูกต้องเข้า MCP handler ตรง ๆ ไม่แตะ OAuth เลย ที่เหลือ
+ตกเป็นของ provider ถ้าตัด static ทิ้งจะพัง `.mcp.json` ของ Claude Code และ client
+อื่นที่ใช้อยู่ ทั้งที่สองทางลงเอยที่ handler เดียวกันและใช้ความลับตัวเดียวกัน
+
+หน้า consent ยืนยันตัวด้วย `MCP_AUTH_TOKEN` แทนการทำระบบบัญชี เพราะ server นี้มี
+ความลับตัวเดียวอยู่แล้ว **ผลข้างเคียงที่ต้องรู้: เปลี่ยน token เมื่อไหร่ต้องต่อ
+connector ใหม่ด้วย** ไม่ใช่แค่แก้ secret
+
+### ทดสอบแล้ว
+
+ยิง OAuth flow เต็มวงจรด้วย script ก่อน แล้วค่อยลองจาก Claude จริง
+
+| ขั้น | ผล |
+| --- | --- |
+| DCR `POST /register` | ได้ `client_id` |
+| `GET /authorize` | ได้หน้า consent |
+| POST ด้วย token ผิด | `401` ไม่ออก code |
+| POST ด้วย token ถูก | redirect พร้อม `code` |
+| `POST /token` (PKCE S256) | ได้ `access_token` |
+| `POST /mcp` ด้วย access token | 13 tools |
+
+จาก Claude จริง: ต่อผ่าน DCR ได้ หน้า consent แสดงชื่อ client ว่า `Claude` และ
+ถามคำถามแรกแล้วตอบถูก — `MCP Bot` · `eliteservicesthai-www` · `Asia/Bangkok`
+พร้อมหยิบ `note` เรื่อง UTC ไปเตือนผู้ใช้เองเหมือนที่เจอบน ChatGPT
 
 ## เรื่อง deploy
 

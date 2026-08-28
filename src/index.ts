@@ -1,6 +1,9 @@
+import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { createMcpHandler, type StatelessMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
 import { registerTools } from "./tools";
+import { oauthDefaultHandler, type OAuthEnv } from "./oauth";
+import { json, secretsMatch } from "./http";
 import type { Env } from "./config";
 
 const MCP_ROUTE = "/mcp";
@@ -9,8 +12,8 @@ const MCP_ROUTE = "/mcp";
  * The server factory receives no env, so each handler closes over the env it
  * was built with. Keying the cache on the env object itself keeps that closure
  * honest: a request carrying a different env — the runtime does not promise one
- * shared instance, and a stale closure silently loses every binding added since
- * — builds its own handler instead of reusing one bound to the wrong bindings.
+ * shared instance, and the OAuth provider passes its own augmented copy — builds
+ * its own handler instead of reusing one bound to the wrong bindings.
  */
 const handlers = new WeakMap<object, StatelessMcpHandler>();
 
@@ -47,73 +50,69 @@ function originOptions(env: Env): { allowedOriginHostnames?: string[] | "*" } {
   return hostnames.length > 0 ? { allowedOriginHostnames: hostnames } : {};
 }
 
+/** The MCP endpoint itself, reached either through OAuth or a static bearer. */
+const mcpApiHandler = {
+  fetch(request: Request, env: OAuthEnv, ctx: ExecutionContext): Promise<Response> {
+    return getHandler(env)(request, env, ctx);
+  },
+};
+
 /**
- * Constant-time secret comparison.
+ * Two ways in, because the clients differ in what they can send.
  *
- * Both sides are hashed first so that `timingSafeEqual` always sees equal
- * lengths — it throws otherwise, and the throw itself would leak the token
- * length.
+ * Claude Code, Codex and anything driven by curl can attach a fixed
+ * `Authorization` header, so they use the shared token directly. Claude's web
+ * connector cannot set headers outside a beta, so it goes through OAuth. Both
+ * end at the same handler; dropping the static path would break the clients
+ * already using it.
  */
-async function secretsMatch(a: string, b: string): Promise<boolean> {
-  const encoder = new TextEncoder();
-  const [left, right] = await Promise.all([
-    crypto.subtle.digest("SHA-256", encoder.encode(a)),
-    crypto.subtle.digest("SHA-256", encoder.encode(b)),
-  ]);
-  return crypto.subtle.timingSafeEqual(new Uint8Array(left), new Uint8Array(right));
-}
-
-function json(body: unknown, status: number, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json", ...headers },
-  });
-}
-
-function unauthorized(detail: string): Response {
-  return json({ error: "unauthorized", detail }, 401, {
-    "www-authenticate": 'Bearer realm="odoo-mcp"',
-  });
-}
-
-/** Returns a rejection Response, or null when the request may proceed. */
-async function authorize(request: Request, env: Env): Promise<Response | null> {
-  // Browsers never attach Authorization to a preflight; let the handler
-  // answer CORS itself.
-  if (request.method === "OPTIONS") return null;
-
-  // Refuse to serve rather than fall open when the secret is unset — this
-  // endpoint is public and fronts a live ERP.
-  if (!env.MCP_AUTH_TOKEN) {
-    return json(
-      {
-        error: "server_misconfigured",
-        detail: "MCP_AUTH_TOKEN is not set. Run: wrangler secret put MCP_AUTH_TOKEN",
-      },
-      500,
-    );
-  }
-
+async function hasStaticBearer(request: Request, env: Env): Promise<boolean> {
+  if (!env.MCP_AUTH_TOKEN) return false;
   const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (!token) return unauthorized("Missing 'Authorization: Bearer <token>' header");
-  if (!(await secretsMatch(token, env.MCP_AUTH_TOKEN))) return unauthorized("Invalid token");
-  return null;
+  if (!token) return false;
+  return secretsMatch(token, env.MCP_AUTH_TOKEN);
+}
+
+let provider: OAuthProvider<OAuthEnv> | undefined;
+
+function getProvider(): OAuthProvider<OAuthEnv> {
+  return (provider ??= new OAuthProvider<OAuthEnv>({
+    apiRoute: MCP_ROUTE,
+    apiHandler: mcpApiHandler,
+    defaultHandler: oauthDefaultHandler,
+    authorizeEndpoint: "/authorize",
+    tokenEndpoint: "/token",
+    // Claude registers itself on first connection (RFC 7591).
+    clientRegistrationEndpoint: "/register",
+  }));
 }
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: OAuthEnv, ctx: ExecutionContext): Promise<Response> {
     const { pathname } = new URL(request.url);
 
-    if (pathname === "/health") {
-      return json({ status: "ok", service: "odoo-mcp" }, 200);
-    }
-    if (pathname !== MCP_ROUTE) {
-      return json({ error: "not_found", detail: `MCP endpoint is ${MCP_ROUTE}` }, 404);
+    if (pathname === MCP_ROUTE) {
+      // Refuse to serve rather than fall open when the secret is unset. Without
+      // it no OAuth grant can be issued either, since the consent screen needs
+      // it — this just fails earlier and more clearly.
+      if (!env.MCP_AUTH_TOKEN) {
+        return json(
+          {
+            error: "server_misconfigured",
+            detail: "MCP_AUTH_TOKEN is not set. Run: wrangler secret put MCP_AUTH_TOKEN",
+          },
+          500,
+        );
+      }
+      if (await hasStaticBearer(request, env)) {
+        return mcpApiHandler.fetch(request, env, ctx);
+      }
     }
 
-    const rejection = await authorize(request, env);
-    if (rejection) return rejection;
-
-    return getHandler(env)(request, env, ctx);
+    // Everything else — the OAuth endpoints, discovery metadata, the consent
+    // screen, /health, and /mcp without a static bearer — belongs to the
+    // provider. It answers an unauthenticated /mcp with the 401 and
+    // `WWW-Authenticate` header Claude needs to find the metadata.
+    return getProvider().fetch(request, env, ctx);
   },
 };

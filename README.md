@@ -82,6 +82,7 @@ Administrator บัญชีสิทธิ์ต่ำตามที่แน
 | `ODOO_URL` `ODOO_DB` `ODOO_USERNAME` `ODOO_PASSWORD` | ทางเลือกสำรองสำหรับ server เดียว |
 | `BLOCKED_MODELS` | ไม่บังคับ รายการ model ที่ทุก tool จะปฏิเสธ คั่นด้วย comma ลงท้าย `*` เพื่อจับแบบขึ้นต้น เช่น `ir.*,res.users*` ถ้าไม่ตั้งจะไม่บล็อกอะไรเลย |
 | `ALLOWED_MODELS` | ไม่บังคับ ถ้าตั้งไว้ model ต้องตรงรายการนี้ด้วยจึงจะใช้ได้ |
+| `OAUTH_KV` | **จำเป็น** KV namespace เก็บ client/grant/token ของ OAuth (ผูกใน `wrangler.jsonc`) |
 | `ALLOWED_ORIGIN_HOSTNAMES` | ไม่บังคับ รายชื่อ hostname คั่นด้วย comma ที่ยอมให้ browser `Origin` เรียก `/mcp` ได้ หรือใส่ `*` ถ้าไม่ตั้ง จะรับเฉพาะ localhost กับ hostname `workers.dev` ของ Worker เอง — client ฝั่ง server ไม่ส่ง `Origin` มาอยู่แล้วจึงไม่ได้รับผลกระทบ |
 
 ควรใช้ **API key** ของ Odoo แทนรหัสผ่านบัญชี และ **อย่าใช้บัญชี admin** —
@@ -131,6 +132,10 @@ npm run dev
 
 ```bash
 npx wrangler login
+
+# OAuth ต้องใช้ KV เก็บ client/grant/token — เอา id ที่ได้ไปใส่ wrangler.jsonc
+npx wrangler kv namespace create OAUTH_KV
+
 npx wrangler deploy
 
 npx wrangler secret put MCP_AUTH_TOKEN     # openssl rand -hex 32
@@ -179,6 +184,27 @@ client ตัวอื่นที่ไม่ได้อ่าน `.mcp.json` 
 Bearer <token>` เองตามรูปแบบเดียวกัน
 
 `GET /health` ไม่ต้อง auth คืน `{"status":"ok"}`
+
+### ต่อจาก Claude (claude.ai / Desktop / มือถือ)
+
+connector ของ Claude ตั้ง header เองไม่ได้ (ฟีเจอร์นั้นยัง beta) จึงต้องใช้ OAuth
+ซึ่ง server นี้รองรับแล้ว — **Customize → Connectors → Add custom connector**
+
+| ช่อง | ใส่อะไร |
+| --- | --- |
+| URL | `https://<subdomain>.workers.dev/mcp` |
+| Authentication | Always required (Claude ตรวจเจอเอง) |
+| OAuth client | No client ID — register one automatically (DCR) |
+
+กด Connect แล้วจะเด้งมาหน้า consent ของ server นี้ **ใส่ `MCP_AUTH_TOKEN` แล้วกดอนุญาต**
+
+ที่ใช้ token เดิมเป็นรหัสยืนยันแทนการสร้างบัญชีใหม่ เพราะ server นี้มีความลับตัวเดียว
+อยู่แล้ว การเพิ่มอีกตัวคือเพิ่มของที่ต้องดูแลโดยไม่ได้ปลอดภัยขึ้น — ผลคือ token
+เดียวทำสองหน้าที่ เป็น static bearer ของ client ที่ส่ง header ได้ และเป็นรหัสหน้า
+consent ของ client ที่ส่งไม่ได้ **เปลี่ยน token เมื่อไหร่ต้องต่อ connector ใหม่ด้วย**
+
+ทั้งสองทางลงเอยที่ handler เดียวกัน request ที่พก static bearer ถูกต้องเข้าตรง ๆ
+ไม่แตะ OAuth เลย ส่วนที่เหลือตกเป็นของ OAuth provider
 
 ## ความปลอดภัย
 
