@@ -177,7 +177,21 @@ Odoo กัน private method ให้เองทุกแพลตฟอร�
 npm install
 cp .dev.vars.example .dev.vars   # แล้วกรอกค่าให้ครบ
 npm run dev
+
+npm run typecheck
+npm test                          # ไม่ต้องมี Odoo — mock fetch เอา
 ```
+
+test ครอบเฉพาะตรรกะที่พังเงียบได้และไม่ต้องพึ่ง Odoo จริง — การจับ `*` ของ
+`BLOCKED_MODELS`, การอ่าน `ODOO_SERVERS`, การลองใหม่เมื่อ uid ค้าง และการเทียบ
+ค่าที่เขียนกับค่าที่ Odoo เก็บจริง
+
+สามในสี่ชุดนั้นมีบั๊กเกิดขึ้นจริงมาแล้ว (`res.users` ที่ไม่จับ `res.users.apikeys`
+และ html field ที่ถูกฟ้องผิดว่าค่าไม่เข้า) test จึงเขียนจากสิ่งที่พลาดมาแล้ว
+ไม่ใช่จากการไล่ให้ครบทุกไฟล์
+
+[CI](.github/workflows/ci.yml) รันสามอย่างนี้ทุก push และ PR — typecheck, test
+และ `wrangler deploy --dry-run` เพื่อจับกรณีที่ compile ผ่านแต่ bundle ไม่ขึ้น
 
 `.dev.vars` ถูก gitignore ไว้แล้ว อย่า commit รหัสผ่านเด็ดขาด
 

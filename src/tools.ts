@@ -96,7 +96,7 @@ function sameText(a: string, b: string): boolean {
  * unambiguous, and stays silent rather than guessing. A false alarm here would
  * send an agent chasing a write that actually succeeded.
  */
-function fieldsNotApplied(
+export function fieldsNotApplied(
   requested: Record<string, unknown>,
   stored: Record<string, unknown>,
 ): string[] {

@@ -1,0 +1,31 @@
+name: CI
+
+# typecheck กับ test มีอยู่ใน scripts อยู่แล้ว แต่ไม่มีอะไรบังคับให้รัน
+# ก่อน merge — ที่ผ่านมาอาศัยว่าคนรันเองทุกครั้ง ซึ่งลืมได้
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # npm ci ใช้เวอร์ชันที่ล็อกไว้ใน package-lock.json ตรง ๆ
+      # ไม่ปล่อยให้ ^ range เลื่อนเองระหว่าง run
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      # จับกรณีที่ compile ผ่านแต่ bundle ไม่ขึ้น เช่น import ที่ Workers ไม่รองรับ
+      # --dry-run ไม่แตะ production และไม่ต้องใช้ credential
+      - run: npx wrangler deploy --dry-run --outdir /tmp/dry-run
