@@ -19,13 +19,15 @@
 | Claude Code | repo นี้ (Cloudflare Worker) | bearer header | ✅ 13 tools |
 | Claude chat | repo นี้ | **OAuth (DCR)** | ✅ 13 tools |
 | ChatGPT | repo นี้ | **OAuth (DCR)** | ✅ 13 tools |
+| Gemini | repo นี้ | **OAuth (DCR)** | ✅ 13 tools |
 | ChatGPT | [odoo-mcp-chatgpt](https://github.com/monthop-gmail/odoo-mcp-chatgpt) (Docker + ท่อ OpenAI) | ท่อจัดการให้ | ✅ 13 tools |
 | Claude chat | `/mcp` ในตัวของ Odoo | — | ❌ Odoo ไม่ได้ทำ OAuth ให้ |
 | ChatGPT | `/mcp` ในตัวของ Odoo | — | ❌ เหตุผลเดียวกัน |
 
-**ข้อสรุปที่ไม่ได้คาดไว้: Claude กับ ChatGPT มีข้อจำกัดเดียวกันเป๊ะ** ทั้งคู่ตั้ง
-custom header ไม่ได้ รองรับแค่ OAuth หรือไม่มี auth ทั้งที่คนละบริษัทคนละ
-implementation
+**ข้อสรุปที่ไม่ได้คาดไว้: Claude, ChatGPT และ Gemini มีข้อจำกัดเดียวกันเป๊ะ**
+ทั้งสามเจ้าตั้ง custom header ไม่ได้ รองรับแค่ OAuth หรือไม่มี auth ทั้งที่เป็นคนละ
+บริษัทคนละ implementation — ทั้งสามลงทะเบียนตัวเองผ่าน DCR (RFC 7591) โดยไม่ต้อง
+ตั้งค่าอะไรเพิ่มฝั่ง server เลย
 
 แปลว่า **OAuth คือทางเดียวที่ใช้กับ AI chat บนคลาวด์ได้ทุกเจ้า** ส่วน static bearer
 ใช้ได้เฉพาะ client ที่รันบนเครื่องเรา (Claude Code, Codex, curl) และ **`/mcp` ในตัว
