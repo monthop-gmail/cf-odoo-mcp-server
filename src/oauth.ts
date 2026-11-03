@@ -19,7 +19,17 @@ import type {
   ClientRegistrationCallbackResult,
   OAuthHelpers,
 } from "@cloudflare/workers-oauth-provider";
-import { consentMode, type Env } from "./config";
+import {
+  ConfigError,
+  consentMode,
+  loadPerUserServer,
+  odooAuthConfigError,
+  odooAuthMode,
+  type Env,
+  type OdooCredential,
+  type PerUserServer,
+} from "./config";
+import { authenticate } from "./odoo";
 import {
   AccessJwtError,
   accessUserId,
@@ -294,11 +304,29 @@ function html(body: string, status = 200): Response {
   return new Response(body, { status, headers: SECURITY_HEADERS });
 }
 
+/**
+ * ช่อง Odoo login + API key ของโหมด per_user — ไม่เติมค่าเดิมกลับมาให้ แม้แต่ login
+ * ข้อความ error ต้องไม่บอกว่าช่องไหนผิด
+ */
+function odooFields(error?: string): string {
+  return `
+      <p>ใส่ login และ <strong>API key ของ Odoo ของคุณเอง</strong>
+         (Odoo → My Profile → Account Security → New API Key) — เครื่องมือจะเรียก
+         Odoo ด้วยบัญชีนี้ และได้สิทธิ์เท่าที่บัญชีนี้มี</p>
+      <label for="odoo_login">Odoo login</label>
+      <input id="odoo_login" name="odoo_login" type="text" autocomplete="off"
+             autocapitalize="off" spellcheck="false" required>
+      <label for="odoo_key" style="margin-top:.75rem">Odoo API key</label>
+      <input id="odoo_key" name="odoo_key" type="password" autocomplete="off" required>
+      ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}`;
+}
+
 function accessConsentPage(
   clientName: string,
   clientId: string,
   redirectUri: string,
   csrf: string,
+  perUser: { error?: string } | null = null,
 ): string {
   return `<!doctype html>
 <html lang="th">
@@ -324,9 +352,9 @@ function accessConsentPage(
       <dt>สิทธิ์</dt><dd>${escapeHtml(SCOPE.join(", "))}</dd>
     </dl>
     <form method="post">
-      <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+      <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">${perUser ? odooFields(perUser.error) : ""}
       <button type="submit" name="decision" value="approve">อนุญาต</button>
-      <button type="submit" name="decision" value="deny" class="deny">ปฏิเสธ</button>
+      <button type="submit" name="decision" value="deny" class="deny" formnovalidate>ปฏิเสธ</button>
     </form>
   </main>
 </body>
@@ -359,6 +387,42 @@ function returnPage(title: string, redirectTo: string): Response {
 </html>`);
 }
 
+/**
+ * ออก nonce ใหม่แล้วแสดงหน้า consent — nonce ผูกกับผู้ใช้และคำขอนี้ ใช้ได้ครั้งเดียว
+ * POST อ่านคำขอจาก KV ไม่เชื่อสิ่งที่ฟอร์มส่งกลับมา
+ */
+async function consentForm(
+  cfg: AccessConfig,
+  sub: string,
+  userId: string,
+  authRequest: AuthRequest,
+  clientName: string | undefined,
+  perUser: PerUserServer | null,
+  error?: { message: string; status: number },
+): Promise<Response> {
+  const nonce = crypto.randomUUID();
+  await cfg.kv.put(
+    `${CSRF_KV_PREFIX}${nonce}`,
+    JSON.stringify({ user: userId, request: authRequest }),
+    { expirationTtl: CSRF_TTL_SECONDS },
+  );
+  const csrf = `${nonce}.${await hmacHex(cfg.csrfSecret, `${nonce}|${sub}`)}`;
+  return html(
+    accessConsentPage(
+      clientName || authRequest.clientId,
+      authRequest.clientId,
+      authRequest.redirectUri,
+      csrf,
+      perUser ? { error: error?.message } : null,
+    ),
+    error?.status ?? 200,
+  );
+}
+
+/** ข้อความเดียวสำหรับ login ผิดและ key ผิด — ไม่บอกว่าผิดที่ช่องไหน */
+const ODOO_REJECTED = "Odoo ไม่รับ login หรือ API key นี้ ตรวจสอบแล้วลองใหม่";
+const ODOO_UNREACHABLE = "ติดต่อ Odoo เพื่อตรวจสอบไม่ได้ ลองใหม่อีกครั้ง";
+
 /** ทุกกรณีที่ตรวจตัวตนไม่ผ่านตอบเหมือนกันหมด ไม่บอกว่าพลาดตรงไหน */
 const forbidden = () => json({ error: "forbidden" }, 403);
 
@@ -374,6 +438,16 @@ async function handleAccessAuthorize(request: Request, env: OAuthEnv): Promise<R
       },
       503,
     );
+  }
+
+  let perUser: PerUserServer | null = null;
+  if (odooAuthMode(env) === "per_user") {
+    try {
+      perUser = loadPerUserServer(env);
+    } catch (error) {
+      if (!(error instanceof ConfigError)) throw error;
+      return json({ error: "server_misconfigured", detail: error.message }, 503);
+    }
   }
 
   const assertion = request.headers.get("cf-access-jwt-assertion");
@@ -401,23 +475,7 @@ async function handleAccessAuthorize(request: Request, env: OAuthEnv): Promise<R
     if (!client) return json({ error: "invalid_client" }, 400);
     if (!isAllowedRedirectUri(authRequest.redirectUri, env)) return invalidRedirect();
 
-    // nonce ผูกกับผู้ใช้และคำขอนี้ ใช้ได้ครั้งเดียว — POST อ่านคำขอจาก KV
-    // ไม่เชื่อสิ่งที่ฟอร์มส่งกลับมา
-    const nonce = crypto.randomUUID();
-    await cfg.kv.put(
-      `${CSRF_KV_PREFIX}${nonce}`,
-      JSON.stringify({ user: userId, request: authRequest }),
-      { expirationTtl: CSRF_TTL_SECONDS },
-    );
-    const csrf = `${nonce}.${await hmacHex(cfg.csrfSecret, `${nonce}|${identity.sub}`)}`;
-    return html(
-      accessConsentPage(
-        client.clientName || authRequest.clientId,
-        authRequest.clientId,
-        authRequest.redirectUri,
-        csrf,
-      ),
-    );
+    return consentForm(cfg, identity.sub, userId, authRequest, client.clientName, perUser);
   }
 
   if (request.method !== "POST") {
@@ -450,9 +508,8 @@ async function handleAccessAuthorize(request: Request, env: OAuthEnv): Promise<R
   // allowlist อาจเปลี่ยนระหว่าง GET กับ POST
   if (!isAllowedRedirectUri(authRequest.redirectUri, env)) return invalidRedirect();
 
-  if (!(await helpers.lookupClient(authRequest.clientId))) {
-    return json({ error: "invalid_client" }, 400);
-  }
+  const client = await helpers.lookupClient(authRequest.clientId);
+  if (!client) return json({ error: "invalid_client" }, 400);
 
   if (form.get("decision") !== "approve") {
     const url = new URL(authRequest.redirectUri);
@@ -461,13 +518,38 @@ async function handleAccessAuthorize(request: Request, env: OAuthEnv): Promise<R
     return returnPage("ปฏิเสธแล้ว", url.toString());
   }
 
+  // โหมด per_user: ออก grant เฉพาะเมื่อ Odoo รับ login + key นี้ (uid > 0)
+  // ผิดก็แสดงฟอร์มใหม่ด้วย nonce ใหม่ — อันเดิมถูกใช้ไปแล้วข้างบน
+  let odoo: OdooCredential | undefined;
+  if (perUser) {
+    const login = form.get("odoo_login");
+    const key = form.get("odoo_key");
+    const retry = (message: string, status: number) =>
+      consentForm(cfg, identity.sub, userId, authRequest, client.clientName, perUser, {
+        message,
+        status,
+      });
+    if (typeof login !== "string" || typeof key !== "string" || !login.trim() || !key) {
+      return retry(ODOO_REJECTED, 401);
+    }
+    let uid: number;
+    try {
+      uid = await authenticate(perUser.url, perUser.db, login.trim(), key);
+    } catch {
+      return retry(ODOO_UNREACHABLE, 502);
+    }
+    if (uid <= 0) return retry(ODOO_REJECTED, 401);
+    odoo = { login: login.trim(), key, uid };
+  }
+
   const { redirectTo } = await helpers.completeAuthorization({
     request: authRequest,
     userId,
     metadata: {},
     scope: SCOPE,
     // ไม่เก็บอีเมล — userId ระบุคนได้พอ และไม่ใช่ข้อมูลส่วนบุคคลตรง ๆ
-    props: { user: userId },
+    // credential Odoo อยู่ใน props เท่านั้น ซึ่ง OAuthProvider เข้ารหัสด้วย token
+    props: odoo ? { user: userId, odoo } : { user: userId },
   });
   return returnPage("อนุญาตแล้ว", redirectTo);
 }
@@ -481,6 +563,10 @@ export const oauthDefaultHandler = {
     const { pathname } = new URL(request.url);
 
     if (pathname === "/authorize") {
+      const misconfigured = odooAuthConfigError(env);
+      if (misconfigured) {
+        return json({ error: "server_misconfigured", detail: misconfigured }, 503);
+      }
       return consentMode(env) === "access"
         ? handleAccessAuthorize(request, env)
         : handleTokenAuthorize(request, env);

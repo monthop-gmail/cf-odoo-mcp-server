@@ -47,6 +47,11 @@ export interface Env {
    * model must match one of these as well as avoid `BLOCKED_MODELS`.
    */
   ALLOWED_MODELS?: string;
+  /**
+   * บัญชีที่ใช้เรียก Odoo: `shared` (ค่าเริ่มต้น — บัญชีเดียวใน env) หรือ
+   * `per_user` (แต่ละคนใส่ API key ของตัวเองตอน consent · ต้อง `CONSENT_MODE=access`)
+   */
+  ODOO_AUTH_MODE?: string;
   /** JSON: `{"default_server":"prod","servers":{"prod":{url,db,username,password}}}` */
   ODOO_SERVERS?: string;
   /** Single-server fallback, mirroring the Python original's env vars. */
@@ -205,4 +210,90 @@ export type ConsentMode = "token" | "access";
 /** ค่าอื่นนอกจาก `access` ถือเป็น `token` — คือพฤติกรรมเดิมก่อนมีตัวแปรนี้ */
 export function consentMode(env: Env): ConsentMode {
   return env.CONSENT_MODE?.trim().toLowerCase() === "access" ? "access" : "token";
+}
+
+export type OdooAuthMode = "shared" | "per_user";
+
+/** ไม่ตั้ง = `shared` · ค่าอื่นนอกสองค่านี้คืน null ให้ผู้เรียกตอบ 503 */
+export function odooAuthMode(env: Env): OdooAuthMode | null {
+  const raw = env.ODOO_AUTH_MODE?.trim().toLowerCase();
+  if (!raw || raw === "shared") return "shared";
+  if (raw === "per_user") return "per_user";
+  return null;
+}
+
+/**
+ * ข้อความอธิบายเมื่อชุด `ODOO_AUTH_MODE` + `CONSENT_MODE` ใช้ไม่ได้ หรือ null ถ้าใช้ได้
+ *
+ * `per_user` ต้องรู้ว่าใครเป็นคนกดอนุญาต ซึ่งโหมด token ให้ไม่ได้ (ทุกคนคือ
+ * "shared") จึงไม่ยอมเปิดคู่กัน แทนที่จะปล่อยให้ทุก grant ใช้ key ของคนแรก
+ */
+export function odooAuthConfigError(env: Env): string | null {
+  const mode = odooAuthMode(env);
+  if (mode === null) return "ODOO_AUTH_MODE must be 'shared' or 'per_user'";
+  if (mode === "per_user" && consentMode(env) !== "access") {
+    return "ODOO_AUTH_MODE=per_user requires CONSENT_MODE=access";
+  }
+  return null;
+}
+
+/**
+ * credential Odoo ของผู้ใช้หนึ่งคน — อยู่ใน props ของ grant ซึ่ง OAuthProvider
+ * เข้ารหัสด้วย token เอง ห้ามเขียนลง KV log หรือ response ที่อื่น
+ */
+export interface OdooCredential {
+  login: string;
+  key: string;
+  uid: number;
+}
+
+/** server เดียวที่โหมด per_user ใช้ — ไม่มี username/password เพราะมาจากผู้ใช้ */
+export interface PerUserServer {
+  name: string;
+  url: string;
+  db: string;
+}
+
+/**
+ * โหมด per_user ใช้แค่ `url`/`db` ของ default server — credential ใน env
+ * ไม่บังคับและไม่ถูกอ่าน server อื่นใน `ODOO_SERVERS` ใช้ไม่ได้
+ */
+export function loadPerUserServer(env: Env): PerUserServer {
+  const pick = (name: string, raw: unknown): PerUserServer => {
+    const config = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
+    for (const key of ["url", "db"]) {
+      if (typeof config[key] !== "string" || config[key] === "") {
+        throw new ConfigError(`ODOO_SERVERS: server '${name}' is missing '${key}'`);
+      }
+    }
+    return {
+      name,
+      url: (config.url as string).replace(/\/+$/, ""),
+      db: config.db as string,
+    };
+  };
+
+  if (env.ODOO_SERVERS) {
+    let parsed: { servers?: Record<string, unknown>; default_server?: unknown };
+    try {
+      parsed = JSON.parse(env.ODOO_SERVERS);
+    } catch {
+      throw new ConfigError("ODOO_SERVERS is not valid JSON");
+    }
+    const entries = Object.entries(parsed.servers ?? {});
+    if (entries.length === 0) throw new ConfigError("ODOO_SERVERS contains no servers");
+    const requested = parsed.default_server;
+    const name = typeof requested === "string" ? requested : entries[0][0];
+    if (!(name in (parsed.servers ?? {}))) {
+      throw new ConfigError(`ODOO_SERVERS: default_server '${name}' is not configured`);
+    }
+    return pick(name, parsed.servers![name]);
+  }
+
+  if (env.ODOO_URL && env.ODOO_DB) {
+    return pick("default", { url: env.ODOO_URL, db: env.ODOO_DB });
+  }
+  throw new ConfigError(
+    "No Odoo server configured. Set ODOO_SERVERS, or ODOO_URL and ODOO_DB.",
+  );
 }

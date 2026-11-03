@@ -5,7 +5,7 @@ import { auditToolCalls, clientLabel, registerTools, type AuditCaller } from "./
 import { checkClientRegistration, oauthDefaultHandler, type OAuthEnv } from "./oauth";
 import { json, secretsMatch } from "./http";
 import { overLimit } from "./rate-limit";
-import type { Env } from "./config";
+import { odooAuthConfigError, type Env, type OdooCredential } from "./config";
 
 const MCP_ROUTE = "/mcp";
 
@@ -15,12 +15,16 @@ const MCP_ROUTE = "/mcp";
  * factory already builds a fresh `McpServer` for every request, so this only
  * adds the thin wrapper around it.
  */
-function buildHandler(env: Env, caller: AuditCaller): StatelessMcpHandler {
+function buildHandler(
+  env: Env,
+  caller: AuditCaller,
+  odoo: OdooCredential | null,
+): StatelessMcpHandler {
   return createMcpHandler(
     () => {
       const server = new McpServer({ name: "odoo-mcp", version: "0.1.0" });
       auditToolCalls(server, caller);
-      registerTools(server, env);
+      registerTools(server, env, odoo);
       return server;
     },
     { route: MCP_ROUTE, ...originOptions(env) },
@@ -51,7 +55,9 @@ function originOptions(env: Env): { allowedOriginHostnames?: string[] | "*" } {
  */
 const mcpApiHandler = {
   fetch(request: Request, env: OAuthEnv, ctx: ExecutionContext): Promise<Response> {
-    const props = (ctx as ExecutionContext & { props?: { user?: unknown } }).props;
+    const props = (ctx as ExecutionContext & { props?: { user?: unknown; odoo?: unknown } })
+      .props;
+    const odoo = odooCredential(props?.odoo);
     const caller: AuditCaller = {
       user: typeof props?.user === "string" ? props.user : "shared",
       clientId: async () => {
@@ -60,10 +66,21 @@ const mcpApiHandler = {
         return (await env.OAUTH_PROVIDER.unwrapToken(token))?.grant.clientId ?? null;
       },
       clientLabel: clientLabel(request.headers),
+      odooUid: odoo?.uid ?? null,
     };
-    return buildHandler(env, caller)(request, env, ctx);
+    return buildHandler(env, caller, odoo)(request, env, ctx);
   },
 };
+
+/** props.odoo ของ grant โหมด per_user — รูปไม่ครบถือว่าไม่มี (tool จะขอให้เชื่อมใหม่) */
+function odooCredential(raw: unknown): OdooCredential | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const { login, key, uid } = raw as Record<string, unknown>;
+  if (typeof login !== "string" || !login) return null;
+  if (typeof key !== "string" || !key) return null;
+  if (typeof uid !== "number" || !(uid > 0)) return null;
+  return { login, key, uid };
+}
 
 /** The MCP endpoint reached with the shared static bearer. */
 function serveStaticBearer(
@@ -75,8 +92,10 @@ function serveStaticBearer(
     user: "bearer",
     clientId: async () => null,
     clientLabel: clientLabel(request.headers),
+    odooUid: null,
   };
-  return buildHandler(env, caller)(request, env, ctx);
+  // static bearer ไม่มีตัวตนผู้ใช้ — โหมด per_user จึงได้ reconnect_required ทุก tool
+  return buildHandler(env, caller, null)(request, env, ctx);
 }
 
 function bearerToken(request: Request): string | undefined {
@@ -135,6 +154,11 @@ export default {
         "Too many requests to /mcp. Slow down and retry in a minute.",
       );
       if (limited) return limited;
+
+      const misconfigured = odooAuthConfigError(env);
+      if (misconfigured) {
+        return json({ error: "server_misconfigured", detail: misconfigured }, 503);
+      }
 
       // Refuse to serve rather than fall open when the secret is unset. Without
       // it no OAuth grant can be issued either, since the consent screen needs

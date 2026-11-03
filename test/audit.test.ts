@@ -23,6 +23,7 @@ const caller = (overrides: Partial<AuditCaller> = {}): AuditCaller => ({
   user: "0123456789abcdef0123456789abcdef",
   clientId: async () => "client-1",
   clientLabel: "fwd:claude.ai",
+  odooUid: null,
   ...overrides,
 });
 
@@ -57,7 +58,17 @@ describe("audit line", () => {
     const lines = auditLines(log);
     expect(lines).toHaveLength(1);
     expect(Object.keys(lines[0]).sort()).toEqual(
-      ["client_id", "client_label", "error_code", "event", "ms", "ok", "tool", "user"].sort(),
+      [
+        "client_id",
+        "client_label",
+        "error_code",
+        "event",
+        "ms",
+        "odoo_uid",
+        "ok",
+        "tool",
+        "user",
+      ].sort(),
     );
     expect(lines[0]).toMatchObject({
       event: "mcp_call",

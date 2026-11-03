@@ -406,6 +406,8 @@ describe("โหมด access — redirect allowlist ตอน authorize", () =>
     "http://claude.ai/cb",
     "https://user:pw@claude.ai/x",
     "https://claude.ai.evil.com/x",
+    "https://evilclaude.ai/x",
+    "https://x.claude.ai/x",
   ];
 
   for (const uri of rejected) {
@@ -438,5 +440,197 @@ describe("โหมด access — redirect allowlist ตอน authorize", () =>
     const env = makeEnv({ CONSENT_MODE: undefined, MCP_AUTH_TOKEN: "s" }).env;
     const res = await getConsent(env, undefined, authorizeUrl("http://localhost:3334/cb"));
     expect(res.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ODOO_AUTH_MODE=per_user — ผู้ใช้ใส่ Odoo API key ของตัวเองตอน consent
+// ---------------------------------------------------------------------------
+
+describe("โหมด per_user — consent", () => {
+  const ODOO_URL = "https://odoo.example.com";
+  const GOOD_LOGIN = "alice@example.com";
+  const GOOD_KEY = "alice-api-key-0123456789";
+  const ODOO_UID = 42;
+
+  /** Odoo ปลอม: รับเฉพาะ GOOD_LOGIN + GOOD_KEY และจดทุก body ที่ส่งไป */
+  const odooBodies: unknown[] = [];
+  beforeEach(() => {
+    odooBodies.length = 0;
+    const certs = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) !== `${ODOO_URL}/jsonrpc`) return certs(input, init);
+        const body = JSON.parse(String(init?.body));
+        odooBodies.push(body);
+        const [db, login, key] = body.params.args;
+        const ok = db === "odoo-db" && login === GOOD_LOGIN && key === GOOD_KEY;
+        return Response.json({ jsonrpc: "2.0", id: 1, result: ok ? ODOO_UID : false });
+      }),
+    );
+  });
+
+  const perUserEnv = (overrides: Record<string, unknown> = {}) =>
+    makeEnv({
+      ODOO_AUTH_MODE: "per_user",
+      ODOO_URL,
+      ODOO_DB: "odoo-db",
+      ...overrides,
+    });
+
+  async function postOdoo(env: never, assertion: string, csrf: string, login: string, key: string) {
+    return oauthDefaultHandler.fetch(
+      new Request("https://mcp.example.com/authorize", {
+        method: "POST",
+        headers: { "cf-access-jwt-assertion": assertion },
+        body: new URLSearchParams({
+          csrf,
+          decision: "approve",
+          odoo_login: login,
+          odoo_key: key,
+        }),
+      }),
+      env,
+    );
+  }
+
+  it("per_user + CONSENT_MODE=token → 503", async () => {
+    const { env } = perUserEnv({ CONSENT_MODE: undefined, MCP_AUTH_TOKEN: "s" });
+    const res = await getConsent(env);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ error: "server_misconfigured" });
+  });
+
+  it("ODOO_AUTH_MODE ค่าอื่น → 503 แม้โหมด token", async () => {
+    const { env } = makeEnv({ CONSENT_MODE: undefined, MCP_AUTH_TOKEN: "s", ODOO_AUTH_MODE: "peruser" });
+    expect((await getConsent(env)).status).toBe(503);
+  });
+
+  it("ไม่มี url/db ของ Odoo → 503 · ไม่บังคับ username/password ใน env", async () => {
+    const { env } = perUserEnv({ ODOO_DB: undefined });
+    expect((await getConsent(env, await jwt())).status).toBe(503);
+    const ok = await getConsent(perUserEnv().env, await jwt());
+    expect(ok.status).toBe(200);
+  });
+
+  it("หน้า consent มีช่อง login + API key (password, autocomplete=off) และคำอธิบาย", async () => {
+    const html = await (await getConsent(perUserEnv().env, await jwt())).text();
+    expect(html).toContain('name="odoo_login"');
+    expect(html).toMatch(/name="odoo_key" type="password" autocomplete="off"/);
+    expect(html).toContain("API key ของ Odoo ของคุณเอง");
+  });
+
+  it("key ถูก → ตรวจด้วย common.authenticate แล้ว grant มี odoo {login,key,uid}", async () => {
+    const { env, completeAuthorization } = perUserEnv();
+    const assertion = await jwt();
+    const csrf = csrfFrom(await (await getConsent(env, assertion)).text());
+    const res = await postOdoo(env, assertion, csrf, GOOD_LOGIN, GOOD_KEY);
+    expect(res.status).toBe(200);
+
+    expect(odooBodies).toEqual([
+      expect.objectContaining({
+        params: {
+          service: "common",
+          method: "authenticate",
+          args: ["odoo-db", GOOD_LOGIN, GOOD_KEY, {}],
+        },
+      }),
+    ]);
+    const options = completeAuthorization.mock.calls[0][0] as unknown as Record<string, unknown>;
+    expect(options.props).toEqual({
+      user: expectedUserId("user-sub-1"),
+      odoo: { login: GOOD_LOGIN, key: GOOD_KEY, uid: ODOO_UID },
+    });
+    expect(await res.text()).not.toContain(GOOD_KEY);
+  });
+
+  it("key ผิด / login ผิด → ไม่ออก grant · ข้อความเดียวกันไม่บอกจุด · ไม่สะท้อนค่ากลับ", async () => {
+    const { env, completeAuthorization } = perUserEnv();
+    const assertion = await jwt();
+    const pages: string[] = [];
+    for (const [login, key] of [
+      [GOOD_LOGIN, "wrong-key-zzz"],
+      ["nobody@example.com", GOOD_KEY],
+    ]) {
+      const csrf = csrfFrom(await (await getConsent(env, assertion)).text());
+      const res = await postOdoo(env, assertion, csrf, login, key);
+      expect(res.status).toBe(401);
+      const html = await res.text();
+      expect(html).not.toContain(key);
+      expect(html).not.toContain(login);
+      pages.push(html.replace(/name="csrf" value="[^"]+"/, ""));
+    }
+    expect(completeAuthorization).not.toHaveBeenCalled();
+    expect(pages[0]).toBe(pages[1]);
+    expect(pages[0]).toContain("Odoo ไม่รับ login หรือ API key นี้");
+  });
+
+  it("key ผิดได้ฟอร์มใหม่พร้อม nonce ใหม่ · nonce เดิมใช้ซ้ำไม่ได้ · ลองใหม่ด้วย key ถูกผ่าน", async () => {
+    const { env, completeAuthorization } = perUserEnv();
+    const assertion = await jwt();
+    const first = csrfFrom(await (await getConsent(env, assertion)).text());
+    const retryPage = await (await postOdoo(env, assertion, first, GOOD_LOGIN, "bad")).text();
+    const second = csrfFrom(retryPage);
+    expect(second).not.toBe(first);
+
+    expect((await postOdoo(env, assertion, first, GOOD_LOGIN, GOOD_KEY)).status).toBe(403);
+    expect((await postOdoo(env, assertion, second, GOOD_LOGIN, GOOD_KEY)).status).toBe(200);
+    expect(completeAuthorization).toHaveBeenCalledTimes(1);
+  });
+
+  it("ไม่มี JWT → 403 ก่อนแตะ Odoo", async () => {
+    const res = await oauthDefaultHandler.fetch(
+      new Request("https://mcp.example.com/authorize", {
+        method: "POST",
+        body: new URLSearchParams({ csrf: "a.b", odoo_login: GOOD_LOGIN, odoo_key: GOOD_KEY }),
+      }),
+      perUserEnv().env,
+    );
+    expect(res.status).toBe(403);
+    expect(odooBodies).toHaveLength(0);
+  });
+
+  it("ติดต่อ Odoo ไม่ได้ → ไม่ออก grant", async () => {
+    const { env, completeAuthorization } = perUserEnv({ ODOO_URL: "https://down.example.com" });
+    const certs = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).startsWith("https://down.example.com")) throw new Error("ECONNREFUSED");
+        return certs(input, init);
+      }),
+    );
+    const assertion = await jwt();
+    const csrf = csrfFrom(await (await getConsent(env, assertion)).text());
+    const res = await postOdoo(env, assertion, csrf, GOOD_LOGIN, GOOD_KEY);
+    expect(res.status).toBe(502);
+    expect(await res.text()).not.toContain(GOOD_KEY);
+    expect(completeAuthorization).not.toHaveBeenCalled();
+  });
+
+  it("ปฏิเสธได้โดยไม่ต้องกรอก key และไม่เรียก Odoo", async () => {
+    const { env, completeAuthorization } = perUserEnv();
+    const assertion = await jwt();
+    const csrf = csrfFrom(await (await getConsent(env, assertion)).text());
+    const html = await (await postConsent(env, assertion, csrf, "deny")).text();
+    expect(html).toContain("error=access_denied");
+    expect(odooBodies).toHaveLength(0);
+    expect(completeAuthorization).not.toHaveBeenCalled();
+  });
+
+  it("ไม่มี key ปรากฏใน console.*", async () => {
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation(() => {}),
+    );
+    const { env } = perUserEnv();
+    const assertion = await jwt();
+    for (const key of ["wrong-key-zzz", GOOD_KEY]) {
+      const csrf = csrfFrom(await (await getConsent(env, assertion)).text());
+      await postOdoo(env, assertion, csrf, GOOD_LOGIN, key);
+    }
+    const logged = JSON.stringify(spies.flatMap((spy) => spy.mock.calls));
+    expect(logged).not.toContain(GOOD_KEY);
+    expect(logged).not.toContain("wrong-key-zzz");
   });
 });

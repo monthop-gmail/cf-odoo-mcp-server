@@ -11,6 +11,11 @@ export interface ServerConfig {
   db: string;
   username: string;
   password: string;
+  /**
+   * uid cache key when it must differ from the server name — per-user
+   * credentials share a server name but not an account.
+   */
+  cacheKey?: string;
 }
 
 export interface OdooConfig {
@@ -30,7 +35,19 @@ export class OdooError extends Error {
 }
 
 /**
- * uid cache, keyed by server name. Scoped to the isolate: a warm isolate skips
+ * Odoo refused the credentials themselves: `authenticate` returned no uid, or
+ * a call raised `AccessDenied` (a revoked API key, a changed password). Not
+ * raised for ACL or record-rule denials, which Odoo reports as `AccessError`.
+ */
+export class OdooAuthError extends OdooError {
+  constructor(message: string, data?: unknown) {
+    super(message, data);
+    this.name = "OdooAuthError";
+  }
+}
+
+/**
+ * uid cache, keyed by server name (or `cacheKey`). Scoped to the isolate: a warm isolate skips
  * re-authenticating, a cold one pays one extra round trip. Never persisted, so
  * a rotated password can never authenticate off a stale entry.
  */
@@ -89,7 +106,9 @@ async function jsonRpc<T>(
     // just "Odoo Server Error".
     const detail = body.error.data?.message ?? body.error.message ?? "Unknown error";
     const name = body.error.data?.name;
-    throw new OdooError(name ? `${name}: ${detail}` : detail, body.error.data);
+    const message = name ? `${name}: ${detail}` : detail;
+    if (name === "odoo.exceptions.AccessDenied") throw new OdooAuthError(message, body.error.data);
+    throw new OdooError(message, body.error.data);
   }
 
   return body.result as T;
@@ -97,6 +116,7 @@ async function jsonRpc<T>(
 
 /** Authenticate and return the uid, using the cached value when present. */
 async function getUid(name: string, config: ServerConfig): Promise<number> {
+  name = config.cacheKey ?? name;
   const cached = uidCache.get(name);
   if (cached !== undefined) return cached;
 
@@ -108,7 +128,7 @@ async function getUid(name: string, config: ServerConfig): Promise<number> {
   ]);
 
   if (!uid) {
-    throw new OdooError(
+    throw new OdooAuthError(
       `Authentication failed for user '${config.username}' on database '${config.db}'`,
     );
   }
@@ -147,9 +167,29 @@ export async function execute<T = unknown>(
   try {
     return await call(uid);
   } catch (error) {
-    if (!uidCache.has(name)) throw error;
-    uidCache.delete(name);
+    const cacheKey = config.cacheKey ?? name;
+    if (!uidCache.has(cacheKey)) throw error;
+    uidCache.delete(cacheKey);
     return await call(await getUid(name, config));
+  }
+}
+
+/**
+ * Check a login and API key without caching anything. Returns the uid, or 0
+ * when Odoo refuses them. Transport failures still throw.
+ */
+export async function authenticate(
+  url: string,
+  db: string,
+  login: string,
+  key: string,
+): Promise<number> {
+  try {
+    const uid = await jsonRpc<number | false>(url, "common", "authenticate", [db, login, key, {}]);
+    return typeof uid === "number" && uid > 0 ? uid : 0;
+  } catch (error) {
+    if (error instanceof OdooAuthError) return 0;
+    throw error;
   }
 }
 
