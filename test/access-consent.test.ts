@@ -399,3 +399,44 @@ describe("โหมด access — หน้า consent และการอน�
     expect(completeAuthorization).not.toHaveBeenCalled();
   });
 });
+
+describe("โหมด access — redirect allowlist ตอน authorize", () => {
+  const rejected = [
+    "https://evil.example/cb",
+    "http://claude.ai/cb",
+    "https://user:pw@claude.ai/x",
+    "https://claude.ai.evil.com/x",
+  ];
+
+  for (const uri of rejected) {
+    it(`GET ${uri} → 400 invalid_redirect_uri`, async () => {
+      const res = await getConsent(makeEnv().env, await jwt(), authorizeUrl(uri));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "invalid_redirect_uri" });
+    });
+  }
+
+  it("POST ตรวจซ้ำ — allowlist เปลี่ยนหลัง GET → 400 และไม่ออก grant", async () => {
+    const { env, completeAuthorization } = makeEnv();
+    const assertion = await jwt();
+    const csrf = csrfFrom(await (await getConsent(env, assertion)).text());
+    (env as { MCP_ALLOWED_REDIRECT_HOSTS?: string }).MCP_ALLOWED_REDIRECT_HOSTS = "chatgpt.com";
+    const res = await postConsent(env, assertion, csrf);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_redirect_uri" });
+    expect(completeAuthorization).not.toHaveBeenCalled();
+  });
+
+  it("MCP_ALLOWED_REDIRECT_HOSTS แทนที่ค่าเริ่มต้น", async () => {
+    const env = makeEnv({ MCP_ALLOWED_REDIRECT_HOSTS: "example.org, chatgpt.com" }).env;
+    expect((await getConsent(env, await jwt())).status).toBe(400);
+    const ok = await getConsent(env, await jwt(), authorizeUrl("https://example.org/cb"));
+    expect(ok.status).toBe(200);
+  });
+
+  it("โหมด token ไม่ตรวจ redirect host (เหมือนเดิม)", async () => {
+    const env = makeEnv({ CONSENT_MODE: undefined, MCP_AUTH_TOKEN: "s" }).env;
+    const res = await getConsent(env, undefined, authorizeUrl("http://localhost:3334/cb"));
+    expect(res.status).toBe(200);
+  });
+});

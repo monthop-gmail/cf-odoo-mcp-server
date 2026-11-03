@@ -30,6 +30,13 @@ export interface Env {
   /** โหมด access: secret สำหรับ HMAC ของ CSRF token ในหน้า consent */
   CONSENT_CSRF_SECRET?: string;
   /**
+   * โหมด access: เปิด DCR (`/register`) เฉพาะค่า `"true"` ตรงตัว — ตั้งชั่วคราว
+   * ตอนเชื่อม connector แล้วลบออก โหมด token ไม่อ่านตัวแปรนี้
+   */
+  MCP_DCR_ENABLED?: string;
+  /** โหมด access: host ของ redirect_uri ที่ยอมรับ คั่นด้วย comma */
+  MCP_ALLOWED_REDIRECT_HOSTS?: string;
+  /**
    * Comma-separated model patterns the tools refuse to touch, e.g.
    * `ir.*,res.users`. A trailing `*` matches by prefix. Unset, nothing is
    * blocked.

@@ -322,12 +322,39 @@ Cloudflare Access ยืนยันมาแล้วใน header `Cf-Access-J
 | `ACCESS_AUD` | Application Audience (AUD) tag ของ Access app ข้างล่าง |
 | `ACCESS_ALLOWED_EMAILS` | อีเมลที่อนุญาต คั่นด้วย comma เทียบตรงตัว (ไม่สนตัวพิมพ์) |
 | `CONSENT_CSRF_SECRET` | secret สุ่ม เช่น `openssl rand -hex 32` |
+| `MCP_DCR_ENABLED` | ใส่ `true` (ตรงตัว) **ชั่วคราวตอนเชื่อม connector** แล้วลบออก — ค่าอื่นหรือไม่ตั้ง `/register` ตอบ `403 registration_disabled` |
+| `MCP_ALLOWED_REDIRECT_HOSTS` | ไม่บังคับ host ของ redirect_uri ที่ยอมรับ คั่นด้วย comma ค่าเริ่มต้น `chatgpt.com,claude.ai,gemini.google.com,dash.cloudflare.com,oauth-callbacks.cloudflareaccess.com` |
+
+ในโหมด access redirect_uri ต้องเป็น `https:` ไม่มี `user:pass` และ host ตรงกับ
+`MCP_ALLOWED_REDIRECT_HOSTS` แบบตรงตัว (`claude.ai.evil.com` ไม่ผ่าน) — ตรวจทุก uri
+ตอน `/register` และตรวจซ้ำตอน `/authorize` ทั้ง GET และ POST (ไม่ผ่าน → `400
+invalid_redirect_uri`) client ที่ใช้ localhost callback จึงต่อผ่าน OAuth ไม่ได้ในโหมดนี้
+ให้ใช้ static bearer แทน · โหมด token ไม่อ่านสองตัวแปรนี้ DCR เปิดและรับ
+redirect_uri อะไรก็ได้เหมือนเดิม
 
 **ตั้ง Access app (Self-hosted) ให้ครอบเฉพาะ path `/authorize`** แล้วเอา AUD tag
 ไปใส่ `ACCESS_AUD` — ห้ามครอบ `/mcp` `/token` `/register` หรือ `/.well-known/*`
 เพราะ client เรียกเส้นทางพวกนี้จากฝั่ง server โดยไม่มีคุกกี้ของ Access ถ้าโดนครอบ
 จะได้หน้า login แทน JSON แล้ว connector พัง Access ที่เปิดจากหน้า Worker บน
 `workers.dev` ครอบทั้ง hostname ไม่แยก path จึงต้องผูก custom domain ก่อน
+
+### audit ราย call (ทุกโหมด)
+
+ทุก `tools/call` เขียน `console.log` หนึ่งบรรทัด JSON ลง Workers Logs
+(เปิด `observability` ไว้แล้วใน `wrangler.jsonc`)
+
+```json
+{"event":"mcp_call","user":"<userId|shared|bearer>","client_id":"…","client_label":"fwd:…","tool":"odoo_search_read","ok":true,"error_code":null,"ms":182}
+```
+
+- `user` — `props.user` ของ grant โหมด access · `shared` สำหรับ grant โหมด token ·
+  `bearer` สำหรับ static bearer
+- `client_id` — ของ grant OAuth (`null` สำหรับ static bearer)
+- `client_label` — `fwd:` + `X-Forwarded-User-Agent` (MCP Portal ส่งต่อมา) ถ้ามี
+  ไม่งั้น `ua:` + `User-Agent` ตัดที่ 120 ตัว อักขระนอก ASCII 0x20–0x7E กลายเป็น `?`
+  ว่างเป็น `null` — client ตั้งเองได้ **ใช้แสดงผลอย่างเดียว ไม่ใช้ตัดสินสิทธิ์**
+- `ok`/`error_code` — `tool_error` เมื่อ tool คืน error · `internal_error` เมื่อโยน exception
+- **ไม่ log** argument ผลลัพธ์ อีเมล หรือ token
 
 ## ความปลอดภัย
 

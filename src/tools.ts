@@ -603,3 +603,93 @@ export function registerTools(server: McpServer, env: Env): void {
     async ({ server: name }) => run(() => version(target(name).server)),
   );
 }
+
+// ---------------------------------------------------------------------------
+// audit ราย tools/call
+// ---------------------------------------------------------------------------
+
+export const CLIENT_LABEL_MAX = 120;
+
+/** ใครเรียก — ได้มาจากชั้น auth ใน index.ts ก่อนถึง tool */
+export interface AuditCaller {
+  /** userId ของ grant โหมด access, `"shared"` สำหรับ grant โหมด token, `"bearer"` สำหรับ static bearer */
+  user: string;
+  /** client_id ของ OAuth — อ่านจาก KV เฉพาะตอนมีการเรียก tool จริง */
+  clientId: () => Promise<string | null>;
+  clientLabel: string | null;
+}
+
+/**
+ * แอปไหนเป็นคนเรียก (claude.ai / chatgpt.com / Claude Code …) จาก
+ * `X-Forwarded-User-Agent` ที่ MCP Portal ส่งต่อมา (`fwd:`) หรือ `User-Agent` (`ua:`)
+ *
+ * client ตั้ง header พวกนี้เองได้ จึงใช้แสดงผลอย่างเดียว ห้ามเอาไปตัดสินสิทธิ์
+ * ตัดที่ 120 ตัวอักษร และแทนอักขระที่ไม่ใช่ ASCII พิมพ์ได้ด้วย `?` กัน log injection
+ */
+export function clientLabel(headers: Pick<Headers, "get">): string | null {
+  const clean = (raw: string | null) =>
+    (raw ?? "").trim().slice(0, CLIENT_LABEL_MAX).replace(/[^\x20-\x7e]/g, "?");
+  const fwd = clean(headers.get("x-forwarded-user-agent"));
+  if (fwd) return `fwd:${fwd}`;
+  const ua = clean(headers.get("user-agent"));
+  return ua ? `ua:${ua}` : null;
+}
+
+type ToolCallback = (...args: unknown[]) => Promise<{ isError?: boolean }>;
+
+async function writeAudit(
+  caller: AuditCaller,
+  entry: { tool: string; errorCode: string | null; ms: number },
+): Promise<void> {
+  try {
+    // บรรทัด JSON เดียวให้ Workers Logs ค้นได้ — ไม่มี argument ผลลัพธ์ อีเมล หรือ token
+    console.log(
+      JSON.stringify({
+        event: "mcp_call",
+        user: caller.user,
+        client_id: await caller.clientId().catch(() => null),
+        client_label: caller.clientLabel,
+        tool: entry.tool,
+        ok: entry.errorCode === null,
+        error_code: entry.errorCode,
+        ms: entry.ms,
+      }),
+    );
+  } catch {
+    // audit พังต้องไม่ทำให้การเรียก tool พัง
+  }
+}
+
+/**
+ * ห่อ `registerTool` ของ server ให้ทุก tool ที่ลงทะเบียนหลังจากนี้เขียน audit
+ * หนึ่งบรรทัดต่อการเรียก
+ *
+ * ห่อที่ชั้นนี้แทนการแกะ JSON-RPC เอง เพราะได้ทั้งชื่อ tool และผลจริง (`isError`)
+ * โดยไม่ต้องอ่าน response ที่อาจเป็น SSE ต้องเรียกก่อน `registerTools`
+ */
+export function auditToolCalls(server: McpServer, caller: AuditCaller): void {
+  const target = server as unknown as {
+    registerTool: (name: string, config: unknown, cb: ToolCallback) => unknown;
+  };
+  const original = target.registerTool.bind(server);
+  target.registerTool = (name, config, cb) =>
+    original(name, config, async (...args: unknown[]) => {
+      const started = Date.now();
+      try {
+        const result = await cb(...args);
+        await writeAudit(caller, {
+          tool: name,
+          errorCode: result?.isError ? "tool_error" : null,
+          ms: Date.now() - started,
+        });
+        return result;
+      } catch (error) {
+        await writeAudit(caller, {
+          tool: name,
+          errorCode: "internal_error",
+          ms: Date.now() - started,
+        });
+        throw error;
+      }
+    });
+}

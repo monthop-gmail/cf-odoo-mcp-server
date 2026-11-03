@@ -13,7 +13,12 @@
  *   so grants issued through the MCP Portal can be told apart per person.
  */
 
-import type { AuthRequest, OAuthHelpers } from "@cloudflare/workers-oauth-provider";
+import type {
+  AuthRequest,
+  ClientRegistrationCallbackOptions,
+  ClientRegistrationCallbackResult,
+  OAuthHelpers,
+} from "@cloudflare/workers-oauth-provider";
 import { consentMode, type Env } from "./config";
 import {
   AccessJwtError,
@@ -184,6 +189,64 @@ function splitList(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+export const DEFAULT_REDIRECT_HOSTS =
+  "chatgpt.com,claude.ai,gemini.google.com,dash.cloudflare.com,oauth-callbacks.cloudflareaccess.com";
+
+export function allowedRedirectHosts(env: Env): string[] {
+  const hosts = splitList(env.MCP_ALLOWED_REDIRECT_HOSTS);
+  return hosts.length > 0 ? hosts : splitList(DEFAULT_REDIRECT_HOSTS);
+}
+
+/**
+ * โหมด access: redirect_uri ต้องเป็น https ไม่มี user:pass และ host ตรงกับรายการ
+ * แบบตรงตัว (`claude.ai.evil.com` ไม่ผ่าน) — ตรวจทั้งตอน DCR และตอน authorize
+ */
+export function isAllowedRedirectUri(uri: unknown, env: Env): boolean {
+  if (typeof uri !== "string") return false;
+  let url: URL;
+  try {
+    url = new URL(uri);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.hash) return false;
+  return allowedRedirectHosts(env).includes(url.hostname.toLowerCase());
+}
+
+/**
+ * นโยบาย DCR (`/register`) — มีผลเฉพาะโหมด access
+ *
+ * โหมด token คืน undefined เสมอ (เปิดและรับ redirect_uri อะไรก็ได้เหมือนเดิม)
+ * โหมด access ปิดเป็นค่าเริ่มต้น เปิดเฉพาะช่วงที่กำลังเชื่อม connector และ
+ * redirect_uri ทุกตัวต้องผ่าน allowlist
+ */
+export function checkClientRegistration(
+  env: Env,
+  { clientMetadata }: Pick<ClientRegistrationCallbackOptions, "clientMetadata">,
+): ClientRegistrationCallbackResult | void {
+  if (consentMode(env) !== "access") return;
+  if (env.MCP_DCR_ENABLED !== "true") {
+    return {
+      code: "registration_disabled",
+      description: "client registration is disabled",
+      status: 403,
+    };
+  }
+  const uris = clientMetadata.redirect_uris;
+  if (
+    !Array.isArray(uris) ||
+    uris.length === 0 ||
+    !uris.every((uri) => isAllowedRedirectUri(uri, env))
+  ) {
+    return {
+      code: "invalid_redirect_uri",
+      description: "redirect_uris must be https on an allowed host",
+    };
+  }
+}
+
+const invalidRedirect = () => json({ error: "invalid_redirect_uri" }, 400);
+
 function toHex(buf: ArrayBuffer): string {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -336,6 +399,7 @@ async function handleAccessAuthorize(request: Request, env: OAuthEnv): Promise<R
     }
     const client = await helpers.lookupClient(authRequest.clientId);
     if (!client) return json({ error: "invalid_client" }, 400);
+    if (!isAllowedRedirectUri(authRequest.redirectUri, env)) return invalidRedirect();
 
     // nonce ผูกกับผู้ใช้และคำขอนี้ ใช้ได้ครั้งเดียว — POST อ่านคำขอจาก KV
     // ไม่เชื่อสิ่งที่ฟอร์มส่งกลับมา
@@ -383,6 +447,8 @@ async function handleAccessAuthorize(request: Request, env: OAuthEnv): Promise<R
     request: AuthRequest;
   };
   if (user !== userId) return forbidden();
+  // allowlist อาจเปลี่ยนระหว่าง GET กับ POST
+  if (!isAllowedRedirectUri(authRequest.redirectUri, env)) return invalidRedirect();
 
   if (!(await helpers.lookupClient(authRequest.clientId))) {
     return json({ error: "invalid_client" }, 400);

@@ -1,8 +1,8 @@
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { createMcpHandler, type StatelessMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
-import { registerTools } from "./tools";
-import { oauthDefaultHandler, type OAuthEnv } from "./oauth";
+import { auditToolCalls, clientLabel, registerTools, type AuditCaller } from "./tools";
+import { checkClientRegistration, oauthDefaultHandler, type OAuthEnv } from "./oauth";
 import { json, secretsMatch } from "./http";
 import { overLimit } from "./rate-limit";
 import type { Env } from "./config";
@@ -10,28 +10,21 @@ import type { Env } from "./config";
 const MCP_ROUTE = "/mcp";
 
 /**
- * The server factory receives no env, so each handler closes over the env it
- * was built with. Keying the cache on the env object itself keeps that closure
- * honest: a request carrying a different env — the runtime does not promise one
- * shared instance, and the OAuth provider passes its own augmented copy — builds
- * its own handler instead of reusing one bound to the wrong bindings.
+ * Built per request because the audit context — who is calling — differs per
+ * request while the server factory receives neither env nor request. The
+ * factory already builds a fresh `McpServer` for every request, so this only
+ * adds the thin wrapper around it.
  */
-const handlers = new WeakMap<object, StatelessMcpHandler>();
-
-function getHandler(env: Env): StatelessMcpHandler {
-  let handler = handlers.get(env as object);
-  if (!handler) {
-    handler = createMcpHandler(
-      () => {
-        const server = new McpServer({ name: "odoo-mcp", version: "0.1.0" });
-        registerTools(server, env);
-        return server;
-      },
-      { route: MCP_ROUTE, ...originOptions(env) },
-    );
-    handlers.set(env as object, handler);
-  }
-  return handler;
+function buildHandler(env: Env, caller: AuditCaller): StatelessMcpHandler {
+  return createMcpHandler(
+    () => {
+      const server = new McpServer({ name: "odoo-mcp", version: "0.1.0" });
+      auditToolCalls(server, caller);
+      registerTools(server, env);
+      return server;
+    },
+    { route: MCP_ROUTE, ...originOptions(env) },
+  );
 }
 
 /**
@@ -51,12 +44,44 @@ function originOptions(env: Env): { allowedOriginHostnames?: string[] | "*" } {
   return hostnames.length > 0 ? { allowedOriginHostnames: hostnames } : {};
 }
 
-/** The MCP endpoint itself, reached either through OAuth or a static bearer. */
+/**
+ * The MCP endpoint reached through OAuth. The provider has already checked the
+ * access token and put the grant's props on `ctx`: grants issued in access mode
+ * carry `{user}`, older token-mode grants carry `{}` and so read as "shared".
+ */
 const mcpApiHandler = {
   fetch(request: Request, env: OAuthEnv, ctx: ExecutionContext): Promise<Response> {
-    return getHandler(env)(request, env, ctx);
+    const props = (ctx as ExecutionContext & { props?: { user?: unknown } }).props;
+    const caller: AuditCaller = {
+      user: typeof props?.user === "string" ? props.user : "shared",
+      clientId: async () => {
+        const token = bearerToken(request);
+        if (!token) return null;
+        return (await env.OAUTH_PROVIDER.unwrapToken(token))?.grant.clientId ?? null;
+      },
+      clientLabel: clientLabel(request.headers),
+    };
+    return buildHandler(env, caller)(request, env, ctx);
   },
 };
+
+/** The MCP endpoint reached with the shared static bearer. */
+function serveStaticBearer(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const caller: AuditCaller = {
+    user: "bearer",
+    clientId: async () => null,
+    clientLabel: clientLabel(request.headers),
+  };
+  return buildHandler(env, caller)(request, env, ctx);
+}
+
+function bearerToken(request: Request): string | undefined {
+  return request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+}
 
 /**
  * Two ways in, because the clients differ in what they can send.
@@ -69,15 +94,21 @@ const mcpApiHandler = {
  */
 async function hasStaticBearer(request: Request, env: Env): Promise<boolean> {
   if (!env.MCP_AUTH_TOKEN) return false;
-  const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const token = bearerToken(request);
   if (!token) return false;
   return secretsMatch(token, env.MCP_AUTH_TOKEN);
 }
 
-let provider: OAuthProvider<OAuthEnv> | undefined;
+/**
+ * Keyed on env because the DCR policy reads it and the registration callback
+ * receives no env of its own.
+ */
+const providers = new WeakMap<object, OAuthProvider<OAuthEnv>>();
 
-function getProvider(): OAuthProvider<OAuthEnv> {
-  return (provider ??= new OAuthProvider<OAuthEnv>({
+function getProvider(env: OAuthEnv): OAuthProvider<OAuthEnv> {
+  let provider = providers.get(env as object);
+  if (provider) return provider;
+  provider = new OAuthProvider<OAuthEnv>({
     apiRoute: MCP_ROUTE,
     apiHandler: mcpApiHandler,
     defaultHandler: oauthDefaultHandler,
@@ -85,7 +116,10 @@ function getProvider(): OAuthProvider<OAuthEnv> {
     tokenEndpoint: "/token",
     // Claude registers itself on first connection (RFC 7591).
     clientRegistrationEndpoint: "/register",
-  }));
+    clientRegistrationCallback: (options) => checkClientRegistration(env, options),
+  });
+  providers.set(env as object, provider);
+  return provider;
 }
 
 export default {
@@ -115,7 +149,7 @@ export default {
         );
       }
       if (await hasStaticBearer(request, env)) {
-        return mcpApiHandler.fetch(request, env, ctx);
+        return serveStaticBearer(request, env, ctx);
       }
     }
 
@@ -123,6 +157,6 @@ export default {
     // screen, /health, and /mcp without a static bearer — belongs to the
     // provider. It answers an unauthenticated /mcp with the 401 and
     // `WWW-Authenticate` header Claude needs to find the metadata.
-    return getProvider().fetch(request, env, ctx);
+    return getProvider(env).fetch(request, env, ctx);
   },
 };
