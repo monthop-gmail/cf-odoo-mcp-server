@@ -5,7 +5,7 @@ import { auditToolCalls, clientLabel, registerTools, type AuditCaller } from "./
 import { checkClientRegistration, oauthDefaultHandler, type OAuthEnv } from "./oauth";
 import { json, secretsMatch } from "./http";
 import { overLimit } from "./rate-limit";
-import { odooAuthConfigError, type Env, type OdooCredential } from "./config";
+import { consentMode, odooAuthConfigError, type Env, type OdooCredential } from "./config";
 
 const MCP_ROUTE = "/mcp";
 
@@ -160,10 +160,15 @@ export default {
         return json({ error: "server_misconfigured", detail: misconfigured }, 503);
       }
 
-      // Refuse to serve rather than fall open when the secret is unset. Without
-      // it no OAuth grant can be issued either, since the consent screen needs
-      // it — this just fails earlier and more clearly.
-      if (!env.MCP_AUTH_TOKEN) {
+      // Token mode: refuse to serve rather than fall open when the secret is
+      // unset. Without it no OAuth grant can be issued either, since the
+      // consent screen needs it — this just fails earlier and more clearly.
+      //
+      // Access mode issues grants through Cloudflare Access and needs no shared
+      // secret. Unset, there is simply no static bearer and the request goes
+      // to the provider, which answers 401 + `WWW-Authenticate` so the client
+      // can find the OAuth metadata. Set, the static bearer still works.
+      if (!env.MCP_AUTH_TOKEN && consentMode(env) === "token") {
         return json(
           {
             error: "server_misconfigured",

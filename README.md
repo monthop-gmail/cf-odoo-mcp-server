@@ -132,7 +132,7 @@ Administrator บัญชีสิทธิ์ต่ำตามที่แน
 
 | ตัวแปร | ใช้ทำอะไร |
 | --- | --- |
-| `MCP_AUTH_TOKEN` | **จำเป็น** bearer token ที่ผู้เรียกต้องแนบมา |
+| `MCP_AUTH_TOKEN` | **จำเป็นเฉพาะโหมด token** (ค่าเริ่มต้น) — static bearer ที่ผู้เรียกแนบมา และรหัสของหน้า consent · โหมด access ไม่ต้องตั้ง และ**แนะนำไม่ตั้ง** เพราะเป็น credential กลางที่ข้ามตัวตนรายคน (ถ้าตั้ง static bearer ยังใช้ได้ audit เป็น `bearer`) |
 | `CONSENT_MODE` | ไม่บังคับ `token` (ค่าเริ่มต้น) หรือ `access` — ดู [โหมด access](#โหมด-access-ใช้กับ-cloudflare-mcp-portal) |
 | `ODOO_AUTH_MODE` | ไม่บังคับ `shared` (ค่าเริ่มต้น — บัญชีเดียวใน env) หรือ `per_user` — ดู [โหมด per_user](#โหมด-per_user--แต่ละคนใช้บัญชี-odoo-ของตัวเอง) |
 | `ODOO_SERVERS` | JSON รองรับหนึ่งหรือหลาย server ถ้าตั้งไว้จะชนะตัวข้างล่าง |
@@ -313,8 +313,9 @@ Cloudflare Access ยืนยันมาแล้วใน header `Cf-Access-J
 - `userId` ของ grant = hex 32 ตัวแรกของ SHA-256(`cf-odoo-user:<iss>|<sub>`) ผูกกับ
   `sub` ไม่ใช่อีเมล — เปลี่ยนอีเมลยังเป็นคนเดิม · props เก็บแค่ `{user}` ไม่เก็บอีเมล
 
-การเรียก Odoo ยังใช้บัญชีเดิมตัวเดียว และ `/mcp` ยังต้องมี `MCP_AUTH_TOKEN`
-เหมือนเดิม โหมดนี้เปลี่ยนแค่วิธียืนยันหน้า consent
+การเรียก Odoo ยังใช้บัญชีเดิมตัวเดียว (ดูโหมด per_user ข้างล่าง) · โหมดนี้ไม่ต้องตั้ง
+`MCP_AUTH_TOKEN` — ไม่ตั้ง `/mcp` ที่ไม่มี token ได้ `401` + `WWW-Authenticate` จาก
+OAuth provider ตามปกติ ถ้าตั้งไว้ static bearer ยังใช้ได้
 
 | ตัวแปร | ค่า |
 | --- | --- |
@@ -392,8 +393,9 @@ Odoo → มุมขวาบน → **My Profile** (หรือ Preferences) 
 ## ความปลอดภัย
 
 endpoint นี้เป็น public ทุก request ที่เข้า `/mcp` จึงต้องแนบ bearer token มาด้วย
-และเทียบแบบ constant time ถ้าไม่ได้ตั้ง `MCP_AUTH_TOKEN` ไว้ Worker จะคืน 500
-แทนที่จะเปิดโล่ง
+และเทียบแบบ constant time ในโหมด token ถ้าไม่ได้ตั้ง `MCP_AUTH_TOKEN` ไว้ Worker
+จะคืน 500 แทนที่จะเปิดโล่ง ส่วนโหมด access ไม่มี token กลาง `/mcp` รับเฉพาะ access
+token ของ OAuth (ไม่มี → `401`)
 
 token ตัวเดียวใช้ร่วมกันเหมาะกับ server ส่วนตัวหรือใช้ภายใน ถ้าต้องแยกตัวตนรายคน
 ให้เอา [Workers OAuth Provider](https://github.com/cloudflare/workers-oauth-provider)
