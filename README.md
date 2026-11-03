@@ -358,6 +358,77 @@ redirect_uri อะไรก็ได้เหมือนเดิม
 - `ok`/`error_code` — `tool_error` เมื่อ tool คืน error · `internal_error` เมื่อโยน exception
 - **ไม่ log** argument ผลลัพธ์ อีเมล หรือ token
 
+### เข้า team-mcp-portal (access + per_user)
+
+ขั้นตอนนี้มาจากการ onboarding จริงหลัง [Cloudflare MCP Portal](https://developers.cloudflare.com/cloudflare-one/applications/configure-apps/mcp-servers/)
+ที่เปิด *Require user auth* — ทุกคนเข้าผ่าน Portal ตัวเดียว และแต่ละคนเรียก Odoo
+ด้วยบัญชีของตัวเอง ค่าในวงเล็บมุม (`<…>`) แทนด้วยของจริงของคุณ
+
+**1. ตัวแปรของ Worker**
+
+| ตัวแปร | ค่า |
+| --- | --- |
+| `CONSENT_MODE` | `access` |
+| `ODOO_AUTH_MODE` | `per_user` ([โหมด per_user](#โหมด-per_user--แต่ละคนใช้บัญชี-odoo-ของตัวเอง)) |
+| `ACCESS_TEAM_DOMAIN` `ACCESS_AUD` `ACCESS_ALLOWED_EMAILS` `CONSENT_CSRF_SECRET` | ตาม[ตารางข้างบน](#โหมด-access-ใช้กับ-cloudflare-mcp-portal) |
+| `ODOO_URL` `ODOO_DB` (หรือ `ODOO_SERVERS` ที่มีแค่ `url`/`db`) | Odoo ที่จะใช้ |
+| `MCP_AUTH_TOKEN` | **ไม่ตั้ง** — โหมด access ไม่บังคับแล้ว และเป็น credential กลางที่ข้ามตัวตนรายคน |
+| `ODOO_USERNAME` `ODOO_PASSWORD` | **ไม่ตั้ง** — ไม่มีบัญชี Odoo กลาง ทุก call ใช้ key ของผู้ใช้ |
+| `MCP_DCR_ENABLED` | **ไม่ตั้ง** — เปิดชั่วคราวเฉพาะขั้นที่ 3 |
+
+**2. โดเมนและ Access**
+
+- ผูก custom domain ให้ Worker (เช่น `odoo-mcp.<โดเมนของคุณ>`) แล้ว**ปิด `workers.dev`
+  และ preview URLs** — ไม่งั้นมีทางเข้าที่สองที่ Access ไม่ได้ครอบ
+- Access app (Self-hosted) ครอบ**เฉพาะ** `<custom domain>/authorize` เท่านั้น — ห้ามครอบ
+  `/mcp` `/token` `/register` `/.well-known/*` (เหตุผลอยู่[ข้างบน](#โหมด-access-ใช้กับ-cloudflare-mcp-portal))
+- ตรวจ: `curl -i -X POST https://<custom domain>/mcp` ต้องได้ `401` + `WWW-Authenticate`
+  (ไม่ใช่หน้า login ของ Access และไม่ใช่ `500`)
+
+**3. เพิ่ม server ใน Portal**
+
+1. เพิ่ม MCP server ชี้ `https://<custom domain>/mcp` แบบ **OAuth** และเปิด
+   **Require user auth**
+2. ตั้ง `MCP_DCR_ENABLED=true` **ชั่วคราว** แล้วเชื่อมจากหน้า Portal
+3. **รอให้ Portal ลงทะเบียนครบ 2 client** — ตัวหนึ่งใช้ callback ฝั่ง admin
+   (ตอนเชื่อมใน dashboard) อีกตัวใช้ callback ฝั่งผู้ใช้ (ตอนผู้ใช้คนแรกเชื่อมผ่าน Portal)
+   ดูได้จาก Workers Logs ว่ามี `POST /register` ตอบ `201` สองครั้ง host ของ callback ทั้งสอง
+   (`dash.cloudflare.com` และ `oauth-callbacks.cloudflareaccess.com`) อยู่ใน
+   `MCP_ALLOWED_REDIRECT_HOSTS` ค่าเริ่มต้นแล้ว
+4. ลบ `MCP_DCR_ENABLED` แล้วยืนยันว่าปิดจริง:
+   `curl -i -X POST https://<custom domain>/register -H 'content-type: application/json' -d '{}'`
+   ต้องได้ `403 registration_disabled`
+
+**ปิดเร็วเกินไป** (client ตัวที่สองยังไม่ได้ลงทะเบียน) ผู้ใช้จะเจอ
+*Authorization Unavailable* ตอนเชื่อมผ่าน Portal — แก้โดยเปิด `MCP_DCR_ENABLED=true`
+ชั่วคราวอีกรอบ ให้ผู้ใช้เชื่อมใหม่จน client ตัวที่สองลงทะเบียน แล้วปิดกลับ
+
+**4. ผู้ใช้แต่ละคน**
+
+สร้าง API key ของตัวเองใน Odoo → **My Profile** → **Account Security** →
+**New API Key** ([รายละเอียด](#สร้าง-api-key-ใน-odoo)) แล้วใส่คู่กับ login ในหน้า
+consent ตอนเชื่อมครั้งแรก — ครั้งต่อไปไม่ต้องใส่อีกจนกว่าจะเปลี่ยน key
+
+**5. ตรวจว่าแยกตัวตนจริง**
+
+ใน Workers Logs แต่ละบรรทัด `mcp_call` ต้องมี
+
+- `user` — hash 32 ตัวที่ต่างกันต่อคน (ไม่ใช่ `shared` หรือ `bearer`)
+- `odoo_uid` — ตรงกับ uid ของคนนั้นใน Odoo (Settings → Users)
+- `client_label` — `fwd:<แอป>` ที่ Portal ส่งต่อมา (ถ้าเป็น `ua:` แปลว่า request นั้นอาจไม่ได้มาทาง Portal)
+
+**ข้อสังเกตที่เจอระหว่าง onboarding**
+
+- ชื่อ tool ใน Portal เป็น `<server>_<tool>` เช่น `<server>_odoo_search_read` — ชื่อใน log
+  ของ Worker ยังเป็นชื่อเดิม (`odoo_search_read`)
+- ปิด tool ใน Portal แล้ว Portal ตอบ `-32602` *not found* เอง request ไม่ถึง Worker
+  จึงไม่มี `mcp_call` ใน log ของ Worker
+- สิทธิ์ข้ามโมดูลของ Odoo มาตรฐาน — เช่น ผู้ใช้กลุ่ม Inventory แก้ `sale.order` ได้ผ่าน
+  `sale_stock` — เป็นนโยบายของ Odoo เอง ไม่ใช่ตัวตนปนกัน ยืนยันได้จาก `odoo_uid` ใน
+  audit ถ้าไม่ต้องการให้ทำได้ต้องแก้สิทธิ์ใน Odoo หรือตั้ง `BLOCKED_MODELS`
+- service token ของ Portal ใช้กับ server ที่เปิด *Require user auth* ไม่ได้ — automation
+  ที่ไม่มีคนกดอนุญาตต้องใช้ทางอื่น
+
 ## โหมด per_user — แต่ละคนใช้บัญชี Odoo ของตัวเอง
 
 โหมด `shared` (ค่าเริ่มต้น) เรียก Odoo ด้วยบัญชีเดียวใน env ทุก call — Odoo จึงไม่รู้
