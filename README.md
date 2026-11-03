@@ -134,6 +134,7 @@ Administrator บัญชีสิทธิ์ต่ำตามที่แน
 | --- | --- |
 | `MCP_AUTH_TOKEN` | **จำเป็น** bearer token ที่ผู้เรียกต้องแนบมา |
 | `CONSENT_MODE` | ไม่บังคับ `token` (ค่าเริ่มต้น) หรือ `access` — ดู [โหมด access](#โหมด-access-ใช้กับ-cloudflare-mcp-portal) |
+| `ODOO_AUTH_MODE` | ไม่บังคับ `shared` (ค่าเริ่มต้น — บัญชีเดียวใน env) หรือ `per_user` — ดู [โหมด per_user](#โหมด-per_user--แต่ละคนใช้บัญชี-odoo-ของตัวเอง) |
 | `ODOO_SERVERS` | JSON รองรับหนึ่งหรือหลาย server ถ้าตั้งไว้จะชนะตัวข้างล่าง |
 | `ODOO_URL` `ODOO_DB` `ODOO_USERNAME` `ODOO_PASSWORD` | ทางเลือกสำรองสำหรับ server เดียว |
 | `BLOCKED_MODELS` | ไม่บังคับ รายการ model ที่ทุก tool จะปฏิเสธ คั่นด้วย comma ลงท้าย `*` เพื่อจับแบบขึ้นต้น เช่น `ir.*,res.users*` ถ้าไม่ตั้งจะไม่บล็อกอะไรเลย |
@@ -355,6 +356,38 @@ redirect_uri อะไรก็ได้เหมือนเดิม
   ว่างเป็น `null` — client ตั้งเองได้ **ใช้แสดงผลอย่างเดียว ไม่ใช้ตัดสินสิทธิ์**
 - `ok`/`error_code` — `tool_error` เมื่อ tool คืน error · `internal_error` เมื่อโยน exception
 - **ไม่ log** argument ผลลัพธ์ อีเมล หรือ token
+
+## โหมด per_user — แต่ละคนใช้บัญชี Odoo ของตัวเอง
+
+โหมด `shared` (ค่าเริ่มต้น) เรียก Odoo ด้วยบัญชีเดียวใน env ทุก call — Odoo จึงไม่รู้
+ว่าใครทำ และทุกคนได้สิทธิ์เท่าบัญชีนั้น ตั้ง `ODOO_AUTH_MODE=per_user` แล้วแต่ละคน
+ใส่ **API key ของ Odoo ของตัวเอง** ตอนกดอนุญาต tool จะเรียก Odoo ด้วยบัญชีของคนนั้น
+Odoo จึงบังคับ ACL และ record rule ของแต่ละคนเอง และ log ฝั่ง Odoo บอกได้ว่าใครทำ
+
+- ใช้ได้เฉพาะคู่กับ `CONSENT_MODE=access` — ไม่งั้น หรือตั้งค่าอื่นนอก `shared`/`per_user`
+  ทั้ง `/authorize` และ `/mcp` ตอบ `503`
+- ใช้แค่ `url`/`db` ของ default server · ไม่ต้องตั้ง `ODOO_USERNAME`/`ODOO_PASSWORD`
+  และถึงตั้งไว้ก็ไม่ถูกใช้ · server อื่นใน `ODOO_SERVERS` ใช้ไม่ได้ (tool ที่ระบุ `server`
+  อื่นได้ error)
+- **ไม่มี fallback ไปบัญชีกลาง** — grant ที่ออกก่อนเปิดโหมดนี้ หรือ static bearer
+  ได้ error `reconnect_required` ทุก tool โดยไม่มี request ไป Odoo เลย
+- audit `mcp_call` มี `odoo_uid` (ตัวเลข ไม่ใช่ login)
+
+### สร้าง API key ใน Odoo
+
+Odoo → มุมขวาบน → **My Profile** (หรือ Preferences) → แท็บ **Account Security** →
+**New API Key** → ตั้งชื่อ เช่น `mcp-claude` → คัดลอก key (Odoo แสดงครั้งเดียว)
+แล้ววางในหน้า consent คู่กับ login ของคุณ — บน Enterprise ต้องเป็น key ชนิด `rpc`
+(ดู[หัวข้อ API key 2 ชนิด](#odoo-19-enterprise-มี-api-key-2-ชนิด--เช็คก่อนว่าต้องใช้อันไหน))
+
+### key ผูกกับ grant
+
+- หน้า consent ตรวจ key ด้วย `common.authenticate` ก่อน — ได้ uid เท่านั้นจึงออก grant
+  ผิดก็ได้ฟอร์มใหม่พร้อมข้อความกลาง ๆ ที่ไม่บอกว่า login หรือ key ผิด
+- key อยู่ใน props ของ grant ซึ่ง OAuthProvider เข้ารหัสด้วย token ของ client เอง —
+  server ไม่เขียน key ลง KV เอง ไม่ log และไม่ส่งกลับใน response ใด ๆ
+- **เพิกถอน key ใน Odoo = ตัดสิทธิ์ทันที** call ถัดไปได้ `reconnect_required`
+- **เปลี่ยน key ต้องเชื่อม connector ใหม่** (Disconnect แล้ว Connect) เพื่อใส่ key ใหม่
 
 ## ความปลอดภัย
 

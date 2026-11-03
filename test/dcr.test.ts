@@ -65,6 +65,8 @@ describe("DCR โหมด access", () => {
     "http://claude.ai/cb",
     "https://user:pw@claude.ai/x",
     "https://claude.ai.evil.com/x",
+    "https://evilclaude.ai/x",
+    "https://x.claude.ai/x",
   ]) {
     it(`redirect ${uri} → ปฏิเสธ`, async () => {
       const res = await register({ ...ACCESS, MCP_DCR_ENABLED: "true" }, [uri]);

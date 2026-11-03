@@ -1,15 +1,26 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
+  ConfigError,
   assertModelAllowed,
   isModelAllowed,
   loadConfig,
   loadModelPolicy,
+  loadPerUserServer,
+  odooAuthMode,
   pickServer,
   type Env,
   type ModelPolicy,
+  type OdooCredential,
 } from "./config";
-import { OdooError, execute, version, type OdooConfig, type ServerConfig } from "./odoo";
+import {
+  OdooAuthError,
+  OdooError,
+  execute,
+  version,
+  type OdooConfig,
+  type ServerConfig,
+} from "./odoo";
 
 /**
  * An Odoo search domain: a flat list whose terms are either a prefix operator
@@ -65,10 +76,34 @@ function formatError(error: unknown) {
   };
 }
 
-async function run(fn: () => Promise<unknown>) {
+/**
+ * โหมด per_user: credential ของผู้ใช้หายไป (grant ออกก่อนเปิดโหมด, static
+ * bearer) หรือ Odoo ไม่รับแล้ว (key ถูกเพิกถอน) — ทางเดียวคือเชื่อม connector
+ * ใหม่ ไม่มีการถอยไปใช้บัญชีใน env
+ */
+export class ReconnectRequiredError extends Error {
+  constructor() {
+    super(
+      "reconnect_required: this connection has no valid Odoo credentials. " +
+        "Reconnect the connector and enter your own Odoo API key again.",
+    );
+    this.name = "ReconnectRequiredError";
+  }
+}
+
+/** error code ของผล tool ที่ audit ต้องรู้ นอกเหนือจาก `tool_error` ทั่วไป */
+const errorCodes = new WeakMap<object, string>();
+
+async function runTool(fn: () => Promise<unknown>, perUser = false) {
   try {
     return formatResult(await fn());
   } catch (error) {
+    if (error instanceof ReconnectRequiredError || (perUser && error instanceof OdooAuthError)) {
+      // ไม่ส่งข้อความของ Odoo ต่อ — บอกแค่ว่าต้องเชื่อมใหม่
+      const result = formatError(new ReconnectRequiredError());
+      errorCodes.set(result, "reconnect_required");
+      return result;
+    }
     return formatError(error);
   }
 }
@@ -179,12 +214,50 @@ async function groupBy(
   }
 }
 
-export function registerTools(server: McpServer, env: Env): void {
+/**
+ * `odoo` คือ credential ของผู้เรียกจาก grant — ใช้เฉพาะโหมด per_user และในโหมดนั้น
+ * เป็นแหล่งเดียว ไม่มีก็ error ไม่อ่าน username/password ใน env
+ */
+export function registerTools(
+  server: McpServer,
+  env: Env,
+  odoo: OdooCredential | null = null,
+): void {
+  const perUser = odooAuthMode(env) === "per_user";
+  const run = (fn: () => Promise<unknown>) => runTool(fn, perUser);
+
+  const perUserConfig = (): OdooConfig => {
+    if (!odoo) throw new ReconnectRequiredError();
+    const { name, url, db } = loadPerUserServer(env);
+    return {
+      servers: {
+        [name]: {
+          url,
+          db,
+          username: odoo.login,
+          password: odoo.key,
+          // แยก uid cache ตามบัญชี — คนละคนใช้ server ชื่อเดียวกัน
+          cacheKey: `per_user:${name}:${odoo.uid}`,
+        },
+      },
+      defaultServer: name,
+    };
+  };
+
   // Resolved lazily and memoised: a config error should surface as a tool
   // error the model can report, not as a failure to start the server.
   let cached: OdooConfig | undefined;
-  const config = () => (cached ??= loadConfig(env));
-  const target = (name?: string) => pickServer(config(), name);
+  const config = () => (cached ??= perUser ? perUserConfig() : loadConfig(env));
+  const target = (name?: string) => {
+    const resolved = config();
+    if (perUser && name !== undefined && name !== resolved.defaultServer) {
+      throw new ConfigError(
+        `Server '${name}' is not available in per_user mode. ` +
+          `Only '${resolved.defaultServer}' can be used.`,
+      );
+    }
+    return pickServer(resolved, name);
+  };
 
   let cachedPolicy: ModelPolicy | undefined;
   const policy = () => (cachedPolicy ??= loadModelPolicy(env));
@@ -617,6 +690,8 @@ export interface AuditCaller {
   /** client_id ของ OAuth — อ่านจาก KV เฉพาะตอนมีการเรียก tool จริง */
   clientId: () => Promise<string | null>;
   clientLabel: string | null;
+  /** uid ของ Odoo จาก grant โหมด per_user (ตัวเลข ไม่ใช่ login) — นอกนั้น null */
+  odooUid: number | null;
 }
 
 /**
@@ -649,6 +724,7 @@ async function writeAudit(
         user: caller.user,
         client_id: await caller.clientId().catch(() => null),
         client_label: caller.clientLabel,
+        odoo_uid: caller.odooUid,
         tool: entry.tool,
         ok: entry.errorCode === null,
         error_code: entry.errorCode,
@@ -679,7 +755,7 @@ export function auditToolCalls(server: McpServer, caller: AuditCaller): void {
         const result = await cb(...args);
         await writeAudit(caller, {
           tool: name,
-          errorCode: result?.isError ? "tool_error" : null,
+          errorCode: result?.isError ? (errorCodes.get(result) ?? "tool_error") : null,
           ms: Date.now() - started,
         });
         return result;
