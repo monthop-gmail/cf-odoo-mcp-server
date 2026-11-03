@@ -14,6 +14,21 @@ export interface Env {
    * unaffected either way.
    */
   ALLOWED_ORIGIN_HOSTNAMES?: string;
+  /** เก็บ client/grant/token ของ OAuth และ nonce ของหน้า consent โหมด access */
+  OAUTH_KV?: KVNamespace;
+  /**
+   * วิธียืนยันหน้า consent: `token` (ค่าเริ่มต้น — ใส่ `MCP_AUTH_TOKEN` ทุก grant
+   * เป็นผู้ใช้ "shared") หรือ `access` (ผ่าน Cloudflare Access แยกผู้ใช้รายคน)
+   */
+  CONSENT_MODE?: string;
+  /** โหมด access: ทีมของ Access เช่น `myteam.cloudflareaccess.com` */
+  ACCESS_TEAM_DOMAIN?: string;
+  /** โหมด access: Application Audience (AUD) tag ของ Access app ที่ครอบ `/authorize` */
+  ACCESS_AUD?: string;
+  /** โหมด access: อีเมลที่อนุญาตได้ คั่นด้วย comma เทียบตรงตัว (ไม่สนตัวพิมพ์) */
+  ACCESS_ALLOWED_EMAILS?: string;
+  /** โหมด access: secret สำหรับ HMAC ของ CSRF token ในหน้า consent */
+  CONSENT_CSRF_SECRET?: string;
   /**
    * Comma-separated model patterns the tools refuse to touch, e.g.
    * `ir.*,res.users`. A trailing `*` matches by prefix. Unset, nothing is
@@ -176,4 +191,11 @@ export function assertModelAllowed(policy: ModelPolicy, model: string): void {
   throw new ConfigError(
     `Model '${model}' is out of scope for this server (${reason}).`,
   );
+}
+
+export type ConsentMode = "token" | "access";
+
+/** ค่าอื่นนอกจาก `access` ถือเป็น `token` — คือพฤติกรรมเดิมก่อนมีตัวแปรนี้ */
+export function consentMode(env: Env): ConsentMode {
+  return env.CONSENT_MODE?.trim().toLowerCase() === "access" ? "access" : "token";
 }
