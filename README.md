@@ -133,6 +133,7 @@ Administrator บัญชีสิทธิ์ต่ำตามที่แน
 | ตัวแปร | ใช้ทำอะไร |
 | --- | --- |
 | `MCP_AUTH_TOKEN` | **จำเป็น** bearer token ที่ผู้เรียกต้องแนบมา |
+| `CONSENT_MODE` | ไม่บังคับ `token` (ค่าเริ่มต้น) หรือ `access` — ดู [โหมด access](#โหมด-access-ใช้กับ-cloudflare-mcp-portal) |
 | `ODOO_SERVERS` | JSON รองรับหนึ่งหรือหลาย server ถ้าตั้งไว้จะชนะตัวข้างล่าง |
 | `ODOO_URL` `ODOO_DB` `ODOO_USERNAME` `ODOO_PASSWORD` | ทางเลือกสำรองสำหรับ server เดียว |
 | `BLOCKED_MODELS` | ไม่บังคับ รายการ model ที่ทุก tool จะปฏิเสธ คั่นด้วย comma ลงท้าย `*` เพื่อจับแบบขึ้นต้น เช่น `ir.*,res.users*` ถ้าไม่ตั้งจะไม่บล็อกอะไรเลย |
@@ -294,6 +295,66 @@ consent ของ client ที่ส่งไม่ได้ **เปลี่�
 
 ทั้งสองทางลงเอยที่ handler เดียวกัน request ที่พก static bearer ถูกต้องเข้าตรง ๆ
 ไม่แตะ OAuth เลย ส่วนที่เหลือตกเป็นของ OAuth provider
+
+## โหมด access (ใช้กับ Cloudflare MCP Portal)
+
+โหมด token (ค่าเริ่มต้น) มีความลับตัวเดียว ทุก grant จึงเป็นผู้ใช้ `shared` คนเดียวกัน
+ตั้ง `CONSENT_MODE=access` แล้วหน้า `/authorize` จะ**ไม่ถามรหัส** แต่เชื่อตัวตนที่
+Cloudflare Access ยืนยันมาแล้วใน header `Cf-Access-Jwt-Assertion` แทน
+
+- ตรวจ JWT เองทั้ง GET และ POST: RS256 · `kid` อยู่ใน
+  `https://<ACCESS_TEAM_DOMAIN>/cdn-cgi/access/certs` (cache ไว้ เจอ `kid` ใหม่ดึงซ้ำได้
+  ไม่เกินนาทีละครั้ง) · ลายเซ็น · `iss` · `aud` · `exp`/`nbf` เผื่อ 60 วินาที ·
+  ต้องมี `sub` และ `email` และอีเมลต้องอยู่ใน `ACCESS_ALLOWED_EMAILS`
+- ไม่ผ่าน → `403` · ขาด config → `503` (ไม่ถอยกลับไปโหมด token)
+- หน้า consent แสดงชื่อแอป client_id และ redirect_uri เต็ม มีปุ่มอนุญาต/ปฏิเสธ
+  CSRF เป็น HMAC + nonce ใน `OAUTH_KV` ใช้ได้ครั้งเดียว อายุ 10 นาที
+- `userId` ของ grant = hex 32 ตัวแรกของ SHA-256(`cf-odoo-user:<iss>|<sub>`) ผูกกับ
+  `sub` ไม่ใช่อีเมล — เปลี่ยนอีเมลยังเป็นคนเดิม · props เก็บแค่ `{user}` ไม่เก็บอีเมล
+
+การเรียก Odoo ยังใช้บัญชีเดิมตัวเดียว และ `/mcp` ยังต้องมี `MCP_AUTH_TOKEN`
+เหมือนเดิม โหมดนี้เปลี่ยนแค่วิธียืนยันหน้า consent
+
+| ตัวแปร | ค่า |
+| --- | --- |
+| `CONSENT_MODE` | `access` |
+| `ACCESS_TEAM_DOMAIN` | `<team>.cloudflareaccess.com` |
+| `ACCESS_AUD` | Application Audience (AUD) tag ของ Access app ข้างล่าง |
+| `ACCESS_ALLOWED_EMAILS` | อีเมลที่อนุญาต คั่นด้วย comma เทียบตรงตัว (ไม่สนตัวพิมพ์) |
+| `CONSENT_CSRF_SECRET` | secret สุ่ม เช่น `openssl rand -hex 32` |
+| `MCP_DCR_ENABLED` | ใส่ `true` (ตรงตัว) **ชั่วคราวตอนเชื่อม connector** แล้วลบออก — ค่าอื่นหรือไม่ตั้ง `/register` ตอบ `403 registration_disabled` |
+| `MCP_ALLOWED_REDIRECT_HOSTS` | ไม่บังคับ host ของ redirect_uri ที่ยอมรับ คั่นด้วย comma ค่าเริ่มต้น `chatgpt.com,claude.ai,gemini.google.com,dash.cloudflare.com,oauth-callbacks.cloudflareaccess.com` |
+
+ในโหมด access redirect_uri ต้องเป็น `https:` ไม่มี `user:pass` และ host ตรงกับ
+`MCP_ALLOWED_REDIRECT_HOSTS` แบบตรงตัว (`claude.ai.evil.com` ไม่ผ่าน) — ตรวจทุก uri
+ตอน `/register` และตรวจซ้ำตอน `/authorize` ทั้ง GET และ POST (ไม่ผ่าน → `400
+invalid_redirect_uri`) client ที่ใช้ localhost callback จึงต่อผ่าน OAuth ไม่ได้ในโหมดนี้
+ให้ใช้ static bearer แทน · โหมด token ไม่อ่านสองตัวแปรนี้ DCR เปิดและรับ
+redirect_uri อะไรก็ได้เหมือนเดิม
+
+**ตั้ง Access app (Self-hosted) ให้ครอบเฉพาะ path `/authorize`** แล้วเอา AUD tag
+ไปใส่ `ACCESS_AUD` — ห้ามครอบ `/mcp` `/token` `/register` หรือ `/.well-known/*`
+เพราะ client เรียกเส้นทางพวกนี้จากฝั่ง server โดยไม่มีคุกกี้ของ Access ถ้าโดนครอบ
+จะได้หน้า login แทน JSON แล้ว connector พัง Access ที่เปิดจากหน้า Worker บน
+`workers.dev` ครอบทั้ง hostname ไม่แยก path จึงต้องผูก custom domain ก่อน
+
+### audit ราย call (ทุกโหมด)
+
+ทุก `tools/call` เขียน `console.log` หนึ่งบรรทัด JSON ลง Workers Logs
+(เปิด `observability` ไว้แล้วใน `wrangler.jsonc`)
+
+```json
+{"event":"mcp_call","user":"<userId|shared|bearer>","client_id":"…","client_label":"fwd:…","tool":"odoo_search_read","ok":true,"error_code":null,"ms":182}
+```
+
+- `user` — `props.user` ของ grant โหมด access · `shared` สำหรับ grant โหมด token ·
+  `bearer` สำหรับ static bearer
+- `client_id` — ของ grant OAuth (`null` สำหรับ static bearer)
+- `client_label` — `fwd:` + `X-Forwarded-User-Agent` (MCP Portal ส่งต่อมา) ถ้ามี
+  ไม่งั้น `ua:` + `User-Agent` ตัดที่ 120 ตัว อักขระนอก ASCII 0x20–0x7E กลายเป็น `?`
+  ว่างเป็น `null` — client ตั้งเองได้ **ใช้แสดงผลอย่างเดียว ไม่ใช้ตัดสินสิทธิ์**
+- `ok`/`error_code` — `tool_error` เมื่อ tool คืน error · `internal_error` เมื่อโยน exception
+- **ไม่ log** argument ผลลัพธ์ อีเมล หรือ token
 
 ## ความปลอดภัย
 

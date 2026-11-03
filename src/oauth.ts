@@ -1,15 +1,31 @@
 /**
  * The consent screen Claude sends a user to before it may call the tools.
  *
- * This server has one shared credential rather than per-user accounts, so
- * "signing in" means proving you hold `MCP_AUTH_TOKEN`. That keeps a single
- * secret to manage: the same value works as a static bearer for clients that
- * can send headers, and as the password here for clients that can only do
- * OAuth.
+ * Two modes, chosen by `CONSENT_MODE`:
+ *
+ * - `token` (default): this server has one shared credential rather than
+ *   per-user accounts, so "signing in" means proving you hold
+ *   `MCP_AUTH_TOKEN`. That keeps a single secret to manage: the same value
+ *   works as a static bearer for clients that can send headers, and as the
+ *   password here for clients that can only do OAuth.
+ * - `access`: Cloudflare Access sits in front of `/authorize` and has already
+ *   signed the user in. The grant belongs to that user (Access `iss` + `sub`),
+ *   so grants issued through the MCP Portal can be told apart per person.
  */
 
-import type { AuthRequest, OAuthHelpers } from "@cloudflare/workers-oauth-provider";
-import type { Env } from "./config";
+import type {
+  AuthRequest,
+  ClientRegistrationCallbackOptions,
+  ClientRegistrationCallbackResult,
+  OAuthHelpers,
+} from "@cloudflare/workers-oauth-provider";
+import { consentMode, type Env } from "./config";
+import {
+  AccessJwtError,
+  accessUserId,
+  verifyAccessJwt,
+  type AccessIdentity,
+} from "./access";
 import { json, secretsMatch } from "./http";
 import { overLimit } from "./rate-limit";
 
@@ -98,7 +114,7 @@ function consentPage(
   });
 }
 
-async function handleAuthorize(request: Request, env: OAuthEnv): Promise<Response> {
+async function handleTokenAuthorize(request: Request, env: OAuthEnv): Promise<Response> {
   if (!env.MCP_AUTH_TOKEN) {
     return json(
       {
@@ -159,6 +175,303 @@ async function handleAuthorize(request: Request, env: OAuthEnv): Promise<Respons
   return Response.redirect(redirectTo, 302);
 }
 
+// ---------------------------------------------------------------------------
+// โหมด access — Cloudflare Access ยืนยันตัวตนให้ก่อนถึงหน้านี้
+// ---------------------------------------------------------------------------
+
+const CSRF_TTL_SECONDS = 600;
+const CSRF_KV_PREFIX = "consent_csrf:";
+
+function splitList(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+export const DEFAULT_REDIRECT_HOSTS =
+  "chatgpt.com,claude.ai,gemini.google.com,dash.cloudflare.com,oauth-callbacks.cloudflareaccess.com";
+
+export function allowedRedirectHosts(env: Env): string[] {
+  const hosts = splitList(env.MCP_ALLOWED_REDIRECT_HOSTS);
+  return hosts.length > 0 ? hosts : splitList(DEFAULT_REDIRECT_HOSTS);
+}
+
+/**
+ * โหมด access: redirect_uri ต้องเป็น https ไม่มี user:pass และ host ตรงกับรายการ
+ * แบบตรงตัว (`claude.ai.evil.com` ไม่ผ่าน) — ตรวจทั้งตอน DCR และตอน authorize
+ */
+export function isAllowedRedirectUri(uri: unknown, env: Env): boolean {
+  if (typeof uri !== "string") return false;
+  let url: URL;
+  try {
+    url = new URL(uri);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.hash) return false;
+  return allowedRedirectHosts(env).includes(url.hostname.toLowerCase());
+}
+
+/**
+ * นโยบาย DCR (`/register`) — มีผลเฉพาะโหมด access
+ *
+ * โหมด token คืน undefined เสมอ (เปิดและรับ redirect_uri อะไรก็ได้เหมือนเดิม)
+ * โหมด access ปิดเป็นค่าเริ่มต้น เปิดเฉพาะช่วงที่กำลังเชื่อม connector และ
+ * redirect_uri ทุกตัวต้องผ่าน allowlist
+ */
+export function checkClientRegistration(
+  env: Env,
+  { clientMetadata }: Pick<ClientRegistrationCallbackOptions, "clientMetadata">,
+): ClientRegistrationCallbackResult | void {
+  if (consentMode(env) !== "access") return;
+  if (env.MCP_DCR_ENABLED !== "true") {
+    return {
+      code: "registration_disabled",
+      description: "client registration is disabled",
+      status: 403,
+    };
+  }
+  const uris = clientMetadata.redirect_uris;
+  if (
+    !Array.isArray(uris) ||
+    uris.length === 0 ||
+    !uris.every((uri) => isAllowedRedirectUri(uri, env))
+  ) {
+    return {
+      code: "invalid_redirect_uri",
+      description: "redirect_uris must be https on an allowed host",
+    };
+  }
+}
+
+const invalidRedirect = () => json({ error: "invalid_redirect_uri" }, 400);
+
+function toHex(buf: ArrayBuffer): string {
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function hmacHex(secret: string, message: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return toHex(await crypto.subtle.sign("HMAC", key, encoder.encode(message)));
+}
+
+interface AccessConfig {
+  teamDomain: string;
+  aud: string;
+  emails: string[];
+  csrfSecret: string;
+  kv: KVNamespace;
+}
+
+/** ขาดตัวไหนก็คืน null แล้วตอบ 503 — ไม่ fail open ไปเป็นโหมด token */
+function accessConfig(env: OAuthEnv): AccessConfig | null {
+  const teamDomain = env.ACCESS_TEAM_DOMAIN?.trim();
+  const aud = env.ACCESS_AUD?.trim();
+  const emails = splitList(env.ACCESS_ALLOWED_EMAILS);
+  if (!teamDomain || !aud || emails.length === 0) return null;
+  if (!env.CONSENT_CSRF_SECRET || !env.OAUTH_KV || !env.OAUTH_PROVIDER) return null;
+  return { teamDomain, aud, emails, csrfSecret: env.CONSENT_CSRF_SECRET, kv: env.OAUTH_KV };
+}
+
+const SECURITY_HEADERS = {
+  "content-type": "text/html; charset=utf-8",
+  "cache-control": "no-store",
+  "x-frame-options": "DENY",
+  "content-security-policy":
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+  "referrer-policy": "no-referrer",
+};
+
+function html(body: string, status = 200): Response {
+  return new Response(body, { status, headers: SECURITY_HEADERS });
+}
+
+function accessConsentPage(
+  clientName: string,
+  clientId: string,
+  redirectUri: string,
+  csrf: string,
+): string {
+  return `<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>เชื่อมต่อ Odoo MCP</title>
+  <style>${STYLE}
+  .warn { opacity: 1; border: 2px solid #b45309; padding: .75rem; border-radius: .4rem; }
+  .deny { background: transparent; color: inherit;
+          border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>อนุญาตให้เชื่อมต่อ</h1>
+    <p class="warn"><strong>อนุญาตเฉพาะเมื่อคุณเพิ่งกดเชื่อมต่อเอง</strong>
+       ถ้าได้ลิงก์นี้มาจากคนอื่น ให้กดปฏิเสธ</p>
+    <dl>
+      <dt>แอป</dt><dd>${escapeHtml(clientName)}</dd>
+      <dt>client_id</dt><dd><code>${escapeHtml(clientId)}</code></dd>
+      <dt>ส่งกลับไปที่</dt><dd><code>${escapeHtml(redirectUri)}</code></dd>
+      <dt>สิทธิ์</dt><dd>${escapeHtml(SCOPE.join(", "))}</dd>
+    </dl>
+    <form method="post">
+      <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+      <button type="submit" name="decision" value="approve">อนุญาต</button>
+      <button type="submit" name="decision" value="deny" class="deny">ปฏิเสธ</button>
+    </form>
+  </main>
+</body>
+</html>`;
+}
+
+/**
+ * หน้าที่พาเบราว์เซอร์กลับไปหา client หลัง POST
+ *
+ * 302 ข้าม origin หลังส่งฟอร์มจะโดน CSP `form-action 'self'` บล็อก จึงใช้
+ * meta refresh กับลิงก์ให้กดเองแทน
+ */
+function returnPage(title: string, redirectTo: string): Response {
+  const target = escapeHtml(redirectTo);
+  return html(`<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="0;url=${target}">
+  <title>${escapeHtml(title)}</title>
+  <style>${STYLE}</style>
+</head>
+<body>
+  <main>
+    <h1>${escapeHtml(title)}</h1>
+    <p>กำลังกลับไปยังแอป ถ้าหน้าไม่เปลี่ยน <a href="${target}" rel="noreferrer">กดที่นี่</a></p>
+  </main>
+</body>
+</html>`);
+}
+
+/** ทุกกรณีที่ตรวจตัวตนไม่ผ่านตอบเหมือนกันหมด ไม่บอกว่าพลาดตรงไหน */
+const forbidden = () => json({ error: "forbidden" }, 403);
+
+async function handleAccessAuthorize(request: Request, env: OAuthEnv): Promise<Response> {
+  const cfg = accessConfig(env);
+  if (!cfg) {
+    return json(
+      {
+        error: "server_misconfigured",
+        detail:
+          "CONSENT_MODE=access needs ACCESS_TEAM_DOMAIN, ACCESS_AUD, " +
+          "ACCESS_ALLOWED_EMAILS, CONSENT_CSRF_SECRET and OAUTH_KV",
+      },
+      503,
+    );
+  }
+
+  const assertion = request.headers.get("cf-access-jwt-assertion");
+  if (!assertion) return forbidden();
+  let identity: AccessIdentity;
+  try {
+    identity = await verifyAccessJwt(assertion, cfg.teamDomain, cfg.aud);
+  } catch (error) {
+    if (error instanceof AccessJwtError) return forbidden();
+    throw error;
+  }
+  if (!cfg.emails.includes(identity.email)) return forbidden();
+  const userId = await accessUserId(identity);
+
+  const helpers = env.OAUTH_PROVIDER;
+
+  if (request.method === "GET") {
+    let authRequest: AuthRequest;
+    try {
+      authRequest = await helpers.parseAuthRequest(request);
+    } catch {
+      return json({ error: "invalid_request" }, 400);
+    }
+    const client = await helpers.lookupClient(authRequest.clientId);
+    if (!client) return json({ error: "invalid_client" }, 400);
+    if (!isAllowedRedirectUri(authRequest.redirectUri, env)) return invalidRedirect();
+
+    // nonce ผูกกับผู้ใช้และคำขอนี้ ใช้ได้ครั้งเดียว — POST อ่านคำขอจาก KV
+    // ไม่เชื่อสิ่งที่ฟอร์มส่งกลับมา
+    const nonce = crypto.randomUUID();
+    await cfg.kv.put(
+      `${CSRF_KV_PREFIX}${nonce}`,
+      JSON.stringify({ user: userId, request: authRequest }),
+      { expirationTtl: CSRF_TTL_SECONDS },
+    );
+    const csrf = `${nonce}.${await hmacHex(cfg.csrfSecret, `${nonce}|${identity.sub}`)}`;
+    return html(
+      accessConsentPage(
+        client.clientName || authRequest.clientId,
+        authRequest.clientId,
+        authRequest.redirectUri,
+        csrf,
+      ),
+    );
+  }
+
+  if (request.method !== "POST") {
+    return json({ error: "method_not_allowed" }, 405, { allow: "GET, POST" });
+  }
+
+  const limited = await overLimit(
+    env.AUTH_LIMIT,
+    request,
+    "Too many authorization attempts. Retry in a minute.",
+  );
+  if (limited) return limited;
+
+  const form = await request.formData();
+  const csrf = form.get("csrf");
+  const [nonce, mac, extra] = typeof csrf === "string" ? csrf.split(".") : [];
+  if (!nonce || !mac || extra !== undefined) return forbidden();
+  if (!(await secretsMatch(mac, await hmacHex(cfg.csrfSecret, `${nonce}|${identity.sub}`)))) {
+    return forbidden();
+  }
+  const kvKey = `${CSRF_KV_PREFIX}${nonce}`;
+  const stored = await cfg.kv.get(kvKey);
+  if (!stored) return forbidden();
+  await cfg.kv.delete(kvKey);
+  const { user, request: authRequest } = JSON.parse(stored) as {
+    user: string;
+    request: AuthRequest;
+  };
+  if (user !== userId) return forbidden();
+  // allowlist อาจเปลี่ยนระหว่าง GET กับ POST
+  if (!isAllowedRedirectUri(authRequest.redirectUri, env)) return invalidRedirect();
+
+  if (!(await helpers.lookupClient(authRequest.clientId))) {
+    return json({ error: "invalid_client" }, 400);
+  }
+
+  if (form.get("decision") !== "approve") {
+    const url = new URL(authRequest.redirectUri);
+    url.searchParams.set("error", "access_denied");
+    if (authRequest.state) url.searchParams.set("state", authRequest.state);
+    return returnPage("ปฏิเสธแล้ว", url.toString());
+  }
+
+  const { redirectTo } = await helpers.completeAuthorization({
+    request: authRequest,
+    userId,
+    metadata: {},
+    scope: SCOPE,
+    // ไม่เก็บอีเมล — userId ระบุคนได้พอ และไม่ใช่ข้อมูลส่วนบุคคลตรง ๆ
+    props: { user: userId },
+  });
+  return returnPage("อนุญาตแล้ว", redirectTo);
+}
+
 /**
  * Everything the OAuth provider does not claim for itself: the consent screen,
  * the health check, and a 404 for the rest.
@@ -167,7 +480,11 @@ export const oauthDefaultHandler = {
   async fetch(request: Request, env: OAuthEnv): Promise<Response> {
     const { pathname } = new URL(request.url);
 
-    if (pathname === "/authorize") return handleAuthorize(request, env);
+    if (pathname === "/authorize") {
+      return consentMode(env) === "access"
+        ? handleAccessAuthorize(request, env)
+        : handleTokenAuthorize(request, env);
+    }
     if (pathname === "/health") {
       return json({ status: "ok", service: "odoo-mcp" }, 200);
     }
