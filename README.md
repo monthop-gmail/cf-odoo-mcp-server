@@ -428,6 +428,10 @@ consent ตอนเชื่อมครั้งแรก — ครั้ง�
   audit ถ้าไม่ต้องการให้ทำได้ต้องแก้สิทธิ์ใน Odoo หรือตั้ง `BLOCKED_MODELS`
 - service token ของ Portal ใช้กับ server ที่เปิด *Require user auth* ไม่ได้ — automation
   ที่ไม่มีคนกดอนุญาตต้องใช้ทางอื่น
+- สร้าง OAuth client ชั่วคราวเพื่อทดสอบ ให้**เพิกถอน token (RFC 7009) ก่อนทิ้ง** —
+  `POST /token` ด้วย `token=<refresh token>&token_type_hint=refresh_token&client_id=<client_id>`
+  (refresh token เพิกถอนทั้ง grant · access token เพิกถอนแค่ตัวนั้น) เพราะ Portal/Access
+  ยังไม่มีทางลบ client หรือ grant รายตัวจากฝั่งแอดมิน
 
 ## โหมด per_user — แต่ละคนใช้บัญชี Odoo ของตัวเอง
 
@@ -460,6 +464,21 @@ Odoo → มุมขวาบน → **My Profile** (หรือ Preferences) 
   server ไม่เขียน key ลง KV เอง ไม่ log และไม่ส่งกลับใน response ใด ๆ
 - **เพิกถอน key ใน Odoo = ตัดสิทธิ์ทันที** call ถัดไปได้ `reconnect_required`
 - **เปลี่ยน key ต้องเชื่อม connector ใหม่** (Disconnect แล้ว Connect) เพื่อใส่ key ใหม่
+
+### ถอนสิทธิ์คนออก (offboarding)
+
+ทำตามลำดับนี้ — แต่ละข้อตัดคนละอย่าง
+
+1. **(ก) เพิกถอน API key ของคนนั้นใน Odoo หรือปิด (archive) user** — ปิด user ได้ผล
+   กับทุก key ของคนนั้นโดยไม่ต้องหาว่า key ไหน → call ถัดไปของทุก grant ได้
+   `reconnect_required` ทันที — **ข้อนี้ตัดได้เร็วที่สุด** เพราะ Odoo ตรวจ key ทุก call
+2. **(ข) เอาอีเมลออกจาก `ACCESS_ALLOWED_EMAILS` และ Access policy ของ Portal** →
+   เข้าหน้า consent ใหม่ไม่ได้ (`403`) จึงสร้าง grant ใหม่ด้วย key อื่นไม่ได้
+3. **(ค) ให้ผู้ใช้หรือแอดมิน sign out ที่หน้า Portal** → เพิกถอน grant ระดับ portal
+   ของบัญชีนั้น
+
+**ทำแค่ (ข) ไม่พอ** — (ข) กันได้แค่ consent ครั้งใหม่ grant ที่ออกไปแล้วยังใช้ได้จน token
+หมดอายุ (และ refresh ต่อได้) ถ้าไม่ได้ทำ (ก)
 
 ## ความปลอดภัย
 
